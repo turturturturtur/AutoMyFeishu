@@ -1,15 +1,58 @@
-"""Feishu webhook signature verification and event parsing."""
+"""Feishu webhook signature verification, decryption, and event parsing."""
 
 from __future__ import annotations
 
+import base64
 import hashlib
-import hmac
 import json
 import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# AES-256-CBC decryption for encrypted Feishu webhook bodies
+# ---------------------------------------------------------------------------
+
+def decrypt_feishu_message(encrypt_string: str, encrypt_key: str) -> dict:
+    """Decrypt a Feishu AES-256-CBC encrypted webhook body.
+
+    Algorithm (per Feishu docs):
+    1. key = sha256(encrypt_key).digest()[:32]   — first 32 bytes of SHA-256 hash
+    2. ciphertext = base64_decode(encrypt_string)
+    3. iv = ciphertext[:16]                       — first 16 bytes are the IV
+    4. plaintext = AES-256-CBC-decrypt(ciphertext[16:], key, iv)
+    5. Strip PKCS7 padding, then JSON-parse.
+    """
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.backends import default_backend
+
+    # Key derivation: SHA-256 of the encrypt_key string, take first 32 bytes
+    key = hashlib.sha256(encrypt_key.encode("utf-8")).digest()
+
+    # Base64-decode the ciphertext
+    ciphertext = base64.b64decode(encrypt_string)
+
+    # First 16 bytes = IV, rest = actual encrypted data
+    iv = ciphertext[:16]
+    encrypted_data = ciphertext[16:]
+
+    # AES-256-CBC decrypt
+    cipher = Cipher(
+        algorithms.AES(key),
+        modes.CBC(iv),
+        backend=default_backend(),
+    )
+    decryptor = cipher.decryptor()
+    padded_plaintext = decryptor.update(encrypted_data) + decryptor.finalize()
+
+    # Strip PKCS7 padding
+    pad_len = padded_plaintext[-1]
+    plaintext = padded_plaintext[:-pad_len].decode("utf-8")
+
+    return json.loads(plaintext)
 
 
 # ---------------------------------------------------------------------------
@@ -64,19 +107,22 @@ def verify_feishu_signature_v2(
     timestamp: str,
     nonce: str,
     body_bytes: bytes,
-    verification_token: str,
+    token: str,
     signature: str,
 ) -> bool:
-    """Verify the X-Lark-Signature header (event callback v2).
+    """Verify X-Lark-Signature for event callback v2.
 
-    Signature algorithm: sha256(timestamp + nonce + encrypt_key + body)
-    Per Feishu docs the key is the *encrypt_key* when encryption is enabled,
-    otherwise it falls back to the verification token for plain-text callbacks.
-    This function uses verification_token as the key material.
+    Algorithm (Feishu docs):
+      str_to_sign = timestamp + nonce + token + body_string
+      expected    = sha256(str_to_sign).hexdigest()
+
+    When encryption is enabled, `token` must be the FEISHU_ENCRYPT_KEY.
+    When encryption is disabled, `token` is the FEISHU_VERIFICATION_TOKEN.
+    Always uses plain SHA-256 (not HMAC).
     """
-    content = timestamp + nonce + verification_token + body_bytes.decode("utf-8")
-    expected = hashlib.sha256(content.encode("utf-8")).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    str_to_sign = timestamp + nonce + token + body_bytes.decode("utf-8")
+    expected = hashlib.sha256(str_to_sign.encode("utf-8")).hexdigest()
+    return expected == signature
 
 
 # ---------------------------------------------------------------------------

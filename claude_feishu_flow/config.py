@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
+from typing import Optional
 
 from pydantic_settings import BaseSettings
 
@@ -15,11 +15,18 @@ class Config(BaseSettings):
 
     # Feishu Bitable target
     bitable_app_token: str
-    bitable_table_id: str
+    # table_id is discovered/created automatically via ensure_experiment_table()
+    # Optionally set to skip the lookup on every startup (populated at runtime).
+    bitable_table_id: str = ""
 
     # Claude / Anthropic
     anthropic_api_key: str
-    claude_model: str = "claude-opus-4-6"
+    # Model name — use any Claude model or a compatible third-party model name.
+    anthropic_model: str = "claude-3-5-sonnet-latest"
+    # Optional: override the Anthropic API base URL for mirror / proxy endpoints.
+    # e.g. "https://your-proxy.example.com/v1"
+    # Leave unset (or empty) to use the official Anthropic API.
+    anthropic_base_url: Optional[str] = None
 
     # Server
     host: str = "0.0.0.0"
@@ -35,3 +42,4 @@ class Config(BaseSettings):
         path = Path(self.workspaces_dir).resolve()
         path.mkdir(parents=True, exist_ok=True)
         return path
+

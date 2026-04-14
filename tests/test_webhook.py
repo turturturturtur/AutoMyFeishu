@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 
@@ -9,6 +10,7 @@ import pytest
 
 from claude_feishu_flow.feishu.webhook import (
     WebhookEvent,
+    decrypt_feishu_message,
     parse_webhook_event,
     verify_feishu_signature_v2,
 )
@@ -141,3 +143,82 @@ def test_parse_message_bad_content_json():
     raw["event"]["message"]["content"] = "not-json"
     event = parse_webhook_event(raw)
     assert event.text == "not-json"
+
+
+# ---------------------------------------------------------------------------
+# AES-256-CBC encryption / decryption round-trip
+# ---------------------------------------------------------------------------
+
+def _encrypt_feishu_message(payload: dict, encrypt_key: str) -> str:
+    """Encrypt a dict the same way Feishu does, for testing purposes."""
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.backends import default_backend
+    import os
+
+    key = hashlib.sha256(encrypt_key.encode("utf-8")).digest()
+    iv = os.urandom(16)
+    plaintext = json.dumps(payload).encode("utf-8")
+
+    # PKCS7 padding
+    pad_len = 16 - (len(plaintext) % 16)
+    plaintext += bytes([pad_len] * pad_len)
+
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+    encryptor = cipher.encryptor()
+    encrypted = encryptor.update(plaintext) + encryptor.finalize()
+
+    return base64.b64encode(iv + encrypted).decode("utf-8")
+
+
+def test_decrypt_url_verification_challenge():
+    """Decrypting an encrypted url_verification payload returns the challenge."""
+    key = "test_encrypt_key_abc"
+    payload = {"challenge": "ch_encrypted_xyz", "type": "url_verification"}
+    encrypted = _encrypt_feishu_message(payload, key)
+
+    result = decrypt_feishu_message(encrypted, key)
+    assert result["challenge"] == "ch_encrypted_xyz"
+
+
+def test_decrypt_message_event():
+    """Decrypting an encrypted message event returns full structure."""
+    key = "myEncryptKey123"
+    payload = {
+        "schema": "2.0",
+        "header": {"event_type": "im.message.receive_v1"},
+        "event": {
+            "sender": {"sender_id": {"open_id": "ou_u1"}},
+            "message": {
+                "message_id": "om_enc001",
+                "chat_id": "oc_enc001",
+                "chat_type": "group",
+                "message_type": "text",
+                "content": json.dumps({"text": "hello encrypted"}),
+            },
+        },
+    }
+    encrypted = _encrypt_feishu_message(payload, key)
+    result = decrypt_feishu_message(encrypted, key)
+    assert result["header"]["event_type"] == "im.message.receive_v1"
+    assert result["event"]["message"]["message_id"] == "om_enc001"
+
+
+def test_decrypt_then_parse_url_verification():
+    """Full pipeline: decrypt encrypted body → parse_webhook_event → url_verification."""
+    key = "pipelineKey"
+    payload = {"challenge": "pipeline_challenge", "type": "url_verification"}
+    encrypted = _encrypt_feishu_message(payload, key)
+
+    decrypted = decrypt_feishu_message(encrypted, key)
+    event = parse_webhook_event(decrypted)
+    assert event.event_type == "url_verification"
+    assert event.challenge == "pipeline_challenge"
+
+
+def test_decrypt_wrong_key_raises():
+    """Using the wrong key should raise an exception (bad padding or JSON)."""
+    payload = {"challenge": "xyz"}
+    encrypted = _encrypt_feishu_message(payload, "correct_key")
+    with pytest.raises(Exception):
+        decrypt_feishu_message(encrypted, "wrong_key")
+
