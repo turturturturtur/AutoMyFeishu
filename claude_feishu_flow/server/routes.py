@@ -156,6 +156,13 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
         task_id = edit_match.group(1)
         user_text = edit_match.group(2).strip()
         exp_dir = svc.config.resolved_experiments_dir() / task_id
+        if not (exp_dir / "setting" / "main.py").exists():
+            await svc.messaging.send_help_card(
+                receive_id=chat_id,
+                receive_id_type="chat_id",
+                error_msg=f"实验 `{task_id}` 不存在或尚未生成脚本，无法编辑。",
+            )
+            return
         is_edit_mode = True
         # Recreate output/ and results/ in case they're missing, but leave setting/ intact
         for sub in ("output", "results"):
