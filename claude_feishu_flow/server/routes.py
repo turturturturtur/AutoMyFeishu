@@ -14,6 +14,7 @@ from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
 
 from claude_feishu_flow.feishu.webhook import parse_webhook_event, verify_feishu_signature_v2, decrypt_feishu_message
+from claude_feishu_flow.ai.client import SubAgentResult
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -421,13 +422,22 @@ async def _handle_sub_agent_message(
 
     loading_msg_id = await svc.messaging.send_text(chat_id, "⏳ 正在处理中，请稍候...")
     try:
-        reply = await svc.claude.chat_with_sub_agent(
+        result: SubAgentResult = await svc.claude.chat_with_sub_agent(
             task_id=task_id,
             user_text=user_text,
             exp_dir=exp_dir,
             history=history,
         )
-        await svc.messaging.send_markdown(chat_id, reply)
+        await svc.messaging.send_markdown(chat_id, result.text)
+        if result.needs_restart:
+            asyncio.create_task(
+                _restart_and_notify(
+                    svc=svc,
+                    task_id=task_id,
+                    exp_dir=exp_dir,
+                    chat_id=chat_id,
+                )
+            )
     except Exception as exc:
         logger.exception("Sub agent error for task=%s: %s", task_id, exc)
         await svc.messaging.send_text(chat_id, f"Sub Agent 出错：{exc}")
@@ -435,6 +445,54 @@ async def _handle_sub_agent_message(
         await svc.messaging.delete_message(loading_msg_id)
         if event_message_id:
             svc.processing_ids.discard(event_message_id)
+
+
+# ---------------------------------------------------------------------------
+# Sub Agent restart helper
+# ---------------------------------------------------------------------------
+
+async def _restart_and_notify(
+    svc,  # type: ignore[no-untyped-def]
+    task_id: str,
+    exp_dir: Path,
+    chat_id: str,
+) -> None:
+    """Kill any running process for task_id, start a fresh one, then report."""
+    await svc.messaging.send_text(chat_id, "🚀 Sub Agent 已为您更新代码并重启实验！")
+    try:
+        result = await svc.executor.run(exp_dir, task_id)
+        if result.was_killed:
+            # This run was itself superseded by yet another restart; stay silent
+            return
+        status = "success" if result.returncode == 0 else "failed"
+        plan_path = exp_dir / "setting" / "plan.md"
+        plan_text = _tail_file(plan_path, 99999)
+        run_log = _tail_file(exp_dir / "output" / "run.log", _LOG_TAIL_RUN)
+        err_log = _tail_file(exp_dir / "output" / "error.log", _LOG_TAIL_ERR)
+        log_text = ""
+        if run_log:
+            log_text += f"### stdout\n{run_log}\n\n"
+        if err_log:
+            log_text += f"### stderr\n{err_log}\n"
+        if not log_text:
+            log_text = "(无日志输出)"
+        summary_md = await svc.claude.summarize_experiment(plan_text, log_text)
+        await svc.messaging.send_experiment_card(
+            receive_id=chat_id,
+            receive_id_type="chat_id",
+            task_id=task_id,
+            command="[Sub Agent 重启]",
+            plan_summary=plan_text[:_PLAN_CARD_MAX] if plan_text else "(无计划文件)",
+            result_summary=summary_md,
+            status=status,
+            duration=result.duration_seconds,
+            repair_count=0,
+        )
+    except asyncio.TimeoutError:
+        await svc.messaging.send_text(chat_id, "⏰ 重启后的实验执行超时，任务已终止。")
+    except Exception as exc:
+        logger.exception("_restart_and_notify failed for task=%s: %s", task_id, exc)
+        await svc.messaging.send_text(chat_id, f"❌ 重启实验时出错：{exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -461,7 +519,11 @@ async def _run_phase_b_and_c(
 
     repair_count = 0
     for attempt in range(max_retries + 1):
-        result = await svc.executor.run(exp_dir)
+        result = await svc.executor.run(exp_dir, task_id)
+        if result.was_killed:
+            # A Sub Agent restart superseded this run; silently exit
+            logger.info("Phase B for task=%s was superseded by a restart, exiting silently", task_id)
+            return
         if result.returncode == 0:
             break
         if attempt < max_retries:

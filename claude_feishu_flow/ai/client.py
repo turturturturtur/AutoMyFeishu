@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncIterator, Optional
 
@@ -21,6 +22,18 @@ from claude_feishu_flow.ai.tools import ALL_TOOLS, SUB_AGENT_TOOLS, handle_read_
 logger = logging.getLogger(__name__)
 
 _MAX_ROUNDS = 12  # raised to accommodate max_tokens continuation rounds
+
+
+@dataclass
+class SubAgentResult:
+    """Return value from chat_with_sub_agent.
+
+    text:           Claude's reply to display to the user.
+    needs_restart:  True when Sub Agent called restart_experiment — the caller
+                    should immediately re-launch the experiment subprocess.
+    """
+    text: str
+    needs_restart: bool = False
 
 
 class ClaudeClient:
@@ -481,7 +494,7 @@ class ClaudeClient:
         user_text: str,
         exp_dir: Path,
         history: list[dict],
-    ) -> str:
+    ) -> SubAgentResult:
         """Handle a single turn of Sub Agent conversation.
 
         The conversation history is mutated in-place so it persists across
@@ -494,7 +507,7 @@ class ClaudeClient:
             history:    Mutable list of conversation messages (mutated in place).
 
         Returns:
-            Claude's text reply.
+            SubAgentResult with Claude's text reply and a needs_restart flag.
         """
         # Trim history to prevent unbounded growth
         if len(history) > self._SUB_AGENT_HISTORY_TRIM_THRESHOLD:
@@ -504,6 +517,7 @@ class ClaudeClient:
 
         system_prompt = build_sub_agent_system_prompt(task_id, str(exp_dir))
         response = None
+        needs_restart = False
 
         for round_num in range(1, self._SUB_AGENT_MAX_ROUNDS + 1):
             logger.info("Sub agent round %d for task=%s", round_num, task_id)
@@ -525,6 +539,11 @@ class ClaudeClient:
                 for block in tool_use_blocks:
                     if block.name == "read_realtime_log":
                         result_text = await handle_read_log(block.input, exp_dir)
+                    elif block.name == "save_script":
+                        result_text = await handle_save_script(block.input, exp_dir)
+                    elif block.name == "restart_experiment":
+                        result_text = "重启请求已收到，正在重启实验…"
+                        needs_restart = True
                     else:
                         result_text = f"Unknown tool: {block.name}"
                     tool_results.append({
@@ -533,6 +552,10 @@ class ClaudeClient:
                         "content": result_text,
                     })
                 history.append({"role": "user", "content": tool_results})
+
+                # If restart was requested, break immediately so routes.py can act
+                if needs_restart:
+                    break
 
                 # If Claude signalled end_turn alongside tool use, break after
                 # processing results (it will have text to show already).
@@ -550,4 +573,5 @@ class ClaudeClient:
                 if block.type == "text":
                     reply_parts.append(block.text)
 
-        return "\n".join(reply_parts) if reply_parts else "(Sub Agent 未返回有效回复)"
+        reply_text = "\n".join(reply_parts) if reply_parts else "(Sub Agent 未返回有效回复)"
+        return SubAgentResult(text=reply_text, needs_restart=needs_restart)

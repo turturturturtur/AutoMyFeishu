@@ -1,7 +1,12 @@
 """Claude tool definitions for the experiment assistant.
 
-Only one tool is needed for the generation phase:
-  save_script — write generated files (plan.md, main.py) to the experiment's setting/ directory.
+Generation phase tools (ALL_TOOLS):
+  save_script — write generated files (plan.md, main.py, run.sh) to the experiment's setting/ directory.
+
+Sub Agent tools (SUB_AGENT_TOOLS):
+  read_realtime_log    — read tail of output/run.log
+  save_script          — overwrite any file under setting/ (same tool, different context)
+  restart_experiment   — signal the orchestrator to kill old process and restart with new code
 """
 
 from __future__ import annotations
@@ -63,7 +68,25 @@ READ_LOG_TOOL: dict = {
     },
 }
 
-SUB_AGENT_TOOLS: list[dict] = [READ_LOG_TOOL]
+RESTART_EXPERIMENT_TOOL: dict = {
+    "name": "restart_experiment",
+    "description": (
+        "终止当前正在运行的实验进程，并用最新的代码（setting/run.sh 或 setting/main.py）重新启动。"
+        "请在调用 save_script 完成代码修改后，立刻调用此工具使修改生效。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "task_id": {
+                "type": "string",
+                "description": "要重启的实验 task_id（例如 exp_xxxxxxxx）。",
+            },
+        },
+        "required": ["task_id"],
+    },
+}
+
+SUB_AGENT_TOOLS: list[dict] = [READ_LOG_TOOL, SAVE_SCRIPT_TOOL, RESTART_EXPERIMENT_TOOL]
 
 
 # ---------------------------------------------------------------------------
