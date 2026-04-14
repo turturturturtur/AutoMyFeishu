@@ -387,7 +387,10 @@ async def _handle_edit_session(
             logger.warning("Failed to send notification: %s", exc)
 
     async def reply(text: str) -> None:
-        await notify(text)
+        try:
+            await svc.messaging.send_markdown(chat_id, text)
+        except Exception as exc:
+            logger.warning("Failed to send markdown reply: %s", exc)
 
     exp_dir = session.exp_dir
     task_id = session.task_id

@@ -64,6 +64,19 @@ class Messaging:
         logger.info("Sent card message to %s; message_id=%s", receive_id, message_id)
         return message_id
 
+    async def send_markdown(
+        self,
+        receive_id: str,
+        markdown_text: str,
+        receive_id_type: ReceiveIdType = "chat_id",
+    ) -> str:
+        """Send a headerless interactive card that renders markdown_text as Markdown."""
+        card = {
+            "config": {"wide_screen_mode": True},
+            "elements": [{"tag": "markdown", "content": markdown_text}],
+        }
+        return await self.send_card(receive_id, card, receive_id_type=receive_id_type)
+
     async def send_experiment_card(
         self,
         receive_id: str,
