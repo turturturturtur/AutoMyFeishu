@@ -77,6 +77,8 @@ class WebhookEvent:
     chat_id: Optional[str] = None
     chat_type: Optional[str] = None   # "p2p" | "group"
     text: Optional[str] = None
+    message_type: Optional[str] = None  # "text" | "image" | ...
+    image_keys: list = field(default_factory=list)  # image_key values for message_type == "image"
     # Raw event dict for forward compatibility
     raw: dict = field(default_factory=dict, repr=False)
 
@@ -153,12 +155,20 @@ def parse_webhook_event(raw: dict) -> WebhookEvent:
         sender: dict = event.get("sender", {})
         message: dict = event.get("message", {})
 
-        # Extract plain text from message content JSON
+        message_type: str = message.get("message_type", "text")
+        image_keys: list = []
+
+        # Extract plain text or image_key from message content JSON
         text: Optional[str] = None
         content_raw = message.get("content", "")
         try:
             content_obj = json.loads(content_raw)
-            text = content_obj.get("text", "").strip()
+            if message_type == "text":
+                text = content_obj.get("text", "").strip()
+            elif message_type == "image":
+                image_key = content_obj.get("image_key", "")
+                if image_key:
+                    image_keys.append(image_key)
         except (json.JSONDecodeError, AttributeError):
             logger.warning("Could not parse message content: %r", content_raw)
             text = content_raw
@@ -170,6 +180,8 @@ def parse_webhook_event(raw: dict) -> WebhookEvent:
             chat_id=message.get("chat_id"),
             chat_type=message.get("chat_type"),
             text=text,
+            message_type=message_type,
+            image_keys=image_keys,
             raw=raw,
         )
 

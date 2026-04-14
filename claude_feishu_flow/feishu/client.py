@@ -69,3 +69,22 @@ class FeishuClient:
         if data.get("code") not in (0, None):
             logger.warning("Feishu API non-zero code: %s", data)
         return data
+
+    async def download_resource(
+        self,
+        message_id: str,
+        file_key: str,
+        resource_type: str = "image",
+    ) -> bytes:
+        """Download a message resource (image/file) and return raw bytes.
+
+        API: GET /open-apis/im/v1/messages/{message_id}/resources/{file_key}?type={resource_type}
+        Response is a binary stream, NOT JSON.
+        """
+        url = f"{self._base_url}/im/v1/messages/{message_id}/resources/{file_key}"
+        headers = await self._headers()
+        headers.pop("Content-Type", None)
+        logger.debug("GET resource %s file_key=%s type=%s", url, file_key, resource_type)
+        resp = await self._http.get(url, headers=headers, params={"type": resource_type})
+        resp.raise_for_status()
+        return resp.content

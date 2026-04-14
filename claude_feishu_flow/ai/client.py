@@ -67,6 +67,7 @@ class ClaudeClient:
         user_text: str,
         workspace_dir: Path,
         is_edit_mode: bool = False,
+        images: Optional[list[dict]] = None,
     ) -> str:
         """Ask Claude to generate plan.md and main.py, saving both via save_script.
 
@@ -115,7 +116,21 @@ class ClaudeClient:
                 )
             initial_content = "\n".join(context_parts)
         else:
-            initial_content = user_text
+            if images:
+                content_blocks: list[dict] = []
+                for img in images:
+                    content_blocks.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": img["media_type"],
+                            "data": img["base64_data"],
+                        },
+                    })
+                content_blocks.append({"type": "text", "text": user_text})
+                initial_content: list[dict] | str = content_blocks
+            else:
+                initial_content = user_text
 
         messages: list[dict] = [{"role": "user", "content": initial_content}]
         saved_files: dict[str, str] = {}  # filename -> abs_path

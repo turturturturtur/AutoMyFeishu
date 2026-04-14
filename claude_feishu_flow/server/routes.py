@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import re
@@ -94,7 +95,8 @@ async def feishu_webhook(
     if event.event_type != "im.message.receive_v1":
         return JSONResponse({"code": 0, "msg": "ignored"})
 
-    if not event.text or not event.text.strip():
+    has_content = (event.text and event.text.strip()) or event.image_keys
+    if not has_content:
         return JSONResponse({"code": 0, "msg": "empty message ignored"})
 
     chat_id: str = event.chat_id or ""
@@ -234,9 +236,28 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
         # ── Phase A: Generation ───────────────────────────────────────────
         await notify("正在理解需求，生成实验计划和脚本，请稍候...")
 
+        # ── Image download & archive ──────────────────────────────────────
+        images: list[dict] = []
+        if event.image_keys and event.message_id:
+            setting_dir = exp_dir / "setting"
+            for idx, img_key in enumerate(event.image_keys, start=1):
+                try:
+                    img_bytes = await svc.feishu.download_resource(
+                        message_id=event.message_id,
+                        file_key=img_key,
+                    )
+                    save_path = setting_dir / f"input_image_{idx}.jpg"
+                    save_path.write_bytes(img_bytes)
+                    b64 = base64.b64encode(img_bytes).decode("utf-8")
+                    images.append({"media_type": "image/jpeg", "base64_data": b64})
+                    logger.info("Downloaded and archived image %s → %s", img_key, save_path)
+                except Exception as exc:
+                    logger.warning("Failed to download image %s: %s", img_key, exc)
+
         script_path = await svc.claude.generate_experiment(
-            user_text=user_text,
+            user_text=user_text or "(用户发送了图片，请参考图片内容生成实验脚本)",
             workspace_dir=exp_dir,
+            images=images if images else None,
         )
         logger.info("Phase A complete: script_path=%s", script_path)
 
