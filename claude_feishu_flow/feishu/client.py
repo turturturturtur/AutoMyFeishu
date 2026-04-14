@@ -70,6 +70,18 @@ class FeishuClient:
             logger.warning("Feishu API non-zero code: %s", data)
         return data
 
+    async def delete(self, path: str) -> dict[str, Any]:
+        """DELETE a Feishu API path, returning the parsed JSON body."""
+        url = f"{self._base_url}/{path.lstrip('/')}"
+        headers = await self._headers()
+        logger.debug("DELETE %s", url)
+        resp = await self._http.delete(url, headers=headers)
+        resp.raise_for_status()
+        data: dict[str, Any] = resp.json()
+        if data.get("code") not in (0, None):
+            logger.warning("Feishu API non-zero code: %s", data)
+        return data
+
     async def download_resource(
         self,
         message_id: str,

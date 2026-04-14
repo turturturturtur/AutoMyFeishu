@@ -77,6 +77,14 @@ class Messaging:
         }
         return await self.send_card(receive_id, card, receive_id_type=receive_id_type)
 
+    async def delete_message(self, message_id: str) -> None:
+        """撤回一条消息。失败只记录 warning，不抛异常，避免中断主流程。"""
+        try:
+            await self._client.delete(f"/im/v1/messages/{message_id}")
+            logger.info("撤回消息 message_id=%s 成功", message_id)
+        except Exception as exc:
+            logger.warning("撤回消息 %s 失败: %s", message_id, exc)
+
     async def send_experiment_card(
         self,
         receive_id: str,

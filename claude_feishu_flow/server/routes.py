@@ -291,6 +291,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
         except Exception as exc:
             logger.warning("Failed to send notification: %s", exc)
 
+    loading_msg_id = await svc.messaging.send_text(chat_id, "⏳ 正在处理中，请稍候...")
     try:
         # ── Phase A: Generation ───────────────────────────────────────────
         await notify("正在理解需求，生成实验计划和脚本，请稍候...")
@@ -337,6 +338,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
         logger.exception("Background task %s failed: %s", task_id, exc)
         await notify(f"❌ 发生错误：{exc}")
     finally:
+        await svc.messaging.delete_message(loading_msg_id)
         if event.message_id:
             svc.processing_ids.discard(event.message_id)
 
@@ -417,6 +419,7 @@ async def _handle_sub_agent_message(
         svc.sub_agent_histories[task_id] = []
     history = svc.sub_agent_histories[task_id]
 
+    loading_msg_id = await svc.messaging.send_text(chat_id, "⏳ 正在处理中，请稍候...")
     try:
         reply = await svc.claude.chat_with_sub_agent(
             task_id=task_id,
@@ -429,6 +432,7 @@ async def _handle_sub_agent_message(
         logger.exception("Sub agent error for task=%s: %s", task_id, exc)
         await svc.messaging.send_text(chat_id, f"Sub Agent 出错：{exc}")
     finally:
+        await svc.messaging.delete_message(loading_msg_id)
         if event_message_id:
             svc.processing_ids.discard(event_message_id)
 
@@ -551,6 +555,7 @@ async def _handle_edit_session(
     exp_dir = session.exp_dir
     task_id = session.task_id
 
+    loading_msg_id = await svc.messaging.send_text(chat_id, "⏳ 正在处理中，请稍候...")
     try:
         await notify(
             f"🗣️ 已进入编辑对话模式，实验 ID：{task_id}\n"
@@ -589,6 +594,7 @@ async def _handle_edit_session(
         logger.exception("Edit session %s failed: %s", task_id, exc)
         await notify(f"❌ 发生错误：{exc}")
     finally:
+        await svc.messaging.delete_message(loading_msg_id)
         session.done = True
         svc.edit_sessions.pop(chat_id, None)
         if event_message_id:
