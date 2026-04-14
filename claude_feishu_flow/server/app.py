@@ -58,6 +58,10 @@ class Services:
     processing_ids: set[str] = field(default_factory=set)
     # Active /edit sessions keyed by chat_id
     edit_sessions: dict[str, EditSession] = field(default_factory=dict)
+    # Multi-agent session routing: maps open_id → "main" (default) or "exp_<uuid>"
+    user_sessions: dict[str, str] = field(default_factory=dict)
+    # Sub Agent conversation histories: maps task_id → list of message dicts
+    sub_agent_histories: dict[str, list[dict]] = field(default_factory=dict)
 
 
 def create_app(config: Config) -> FastAPI:
