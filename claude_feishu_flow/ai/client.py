@@ -484,7 +484,7 @@ class ClaudeClient:
     # Sub Agent: per-experiment conversational assistant with log reading
     # ------------------------------------------------------------------
 
-    _SUB_AGENT_MAX_ROUNDS = 5
+    _SUB_AGENT_MAX_ROUNDS = 8
     _SUB_AGENT_HISTORY_TRIM_THRESHOLD = 60
     _SUB_AGENT_HISTORY_KEEP = 40
 
@@ -524,7 +524,7 @@ class ClaudeClient:
 
             response = await self._client.messages.create(
                 model=self._model,
-                max_tokens=4096,
+                max_tokens=8192,
                 system=system_prompt,
                 tools=SUB_AGENT_TOOLS,
                 messages=history,
@@ -533,6 +533,31 @@ class ClaudeClient:
             history.append({"role": "assistant", "content": response.content})
 
             tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
+
+            # If the response was cut off mid-generation (max_tokens) while trying
+            # to write tool inputs, the block.input dict will be empty or missing
+            # required keys.  Return a clear error for every truncated block so
+            # Claude can retry with a shorter payload.
+            if response.stop_reason == "max_tokens" and tool_use_blocks:
+                trunc_results = [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": (
+                            "Error: response was truncated before tool input was complete "
+                            "(max_tokens limit reached). Please retry this tool call with "
+                            "a shorter/chunked file content."
+                        ),
+                        "is_error": True,
+                    }
+                    for block in tool_use_blocks
+                ]
+                history.append({"role": "user", "content": trunc_results})
+                logger.warning(
+                    "Sub agent round %d truncated mid-tool-use for task=%s (%d blocks affected)",
+                    round_num, task_id, len(tool_use_blocks),
+                )
+                continue
 
             if tool_use_blocks:
                 tool_results = []
@@ -567,13 +592,17 @@ class ClaudeClient:
                             })
                     except Exception as tool_exc:
                         logger.warning(
-                            "Tool %r execution failed for task=%s: %s",
-                            block.name, task_id, tool_exc,
+                            "Tool %r execution failed for task=%s: %s (input keys: %s)",
+                            block.name, task_id, tool_exc, list(block.input.keys()) if block.input else "empty",
                         )
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
-                            "content": f"Tool execution failed: {tool_exc}",
+                            "content": (
+                                f"Tool execution failed: {tool_exc}. "
+                                f"Received input keys: {list(block.input.keys()) if block.input else 'none'}. "
+                                "Please retry with all required fields (filename and code)."
+                            ),
                             "is_error": True,
                         })
                 history.append({"role": "user", "content": tool_results})
