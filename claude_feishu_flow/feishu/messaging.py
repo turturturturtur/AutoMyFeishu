@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Literal
 
 from claude_feishu_flow.feishu.client import FeishuClient
@@ -154,6 +155,8 @@ class Messaging:
                 "**📖 使用帮助**\n\n"
                 "**新建实验**\n"
                 "```\n<实验描述>\n```\n\n"
+                "**列出所有实验**\n"
+                "```\n/list\n```\n\n"
                 "**修改已有实验**\n"
                 "```\n/edit exp_<uuid> <修改指令>\n```\n"
                 "示例：`/edit exp_19caeba9-bfac-440a-9314-7cfe0244a165 把输出改成英文`\n\n"
@@ -172,5 +175,53 @@ class Messaging:
                 "template": "yellow",
             },
             "elements": elements,
+        }
+        return await self.send_card(receive_id, card, receive_id_type=receive_id_type)  # type: ignore[arg-type]
+
+    async def send_list_card(
+        self,
+        receive_id: str,
+        receive_id_type: str,
+        entries: list[Path],
+    ) -> str:
+        """Send a card listing all existing experiments.
+
+        Args:
+            receive_id:      Feishu chat_id or open_id.
+            receive_id_type: "chat_id" | "open_id" etc.
+            entries:         Experiment directories sorted newest-first.
+
+        Returns:
+            Created message_id.
+        """
+        if not entries:
+            body = "_(暂无实验记录)_"
+        else:
+            lines = []
+            for d in entries:
+                status_icon = "✅" if (d / "results" / "summary.md").exists() else "⏳"
+                lines.append(f"{status_icon} `{d.name}`")
+            body = "\n".join(lines)
+
+        card = {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": f"📋 实验列表（共 {len(entries)} 个）",
+                },
+                "template": "blue",
+            },
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": body,
+                },
+                {"tag": "hr"},
+                {
+                    "tag": "markdown",
+                    "content": "✅ 已完成　⏳ 未完成/运行中\n用 `/edit exp_<uuid> <指令>` 修改某个实验",
+                },
+            ],
         }
         return await self.send_card(receive_id, card, receive_id_type=receive_id_type)  # type: ignore[arg-type]

@@ -140,6 +140,10 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
     task_id: str
     exp_dir: Path
 
+    if user_text.strip() == "/list":
+        await _handle_list(chat_id, svc)
+        return
+
     if user_text.startswith("/edit"):
         edit_match = re.match(r'^/edit\s+(exp_[0-9a-f-]+)\s+(\S.*)', user_text, re.DOTALL)
         if not edit_match:
@@ -283,3 +287,19 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
         # Clean up dedup set to avoid unbounded growth in long-running servers
         if event.message_id:
             svc.processing_ids.discard(event.message_id)
+
+
+async def _handle_list(chat_id: str, svc) -> None:  # type: ignore[no-untyped-def]
+    """List all experiment directories and send a summary card."""
+    experiments_dir = svc.config.resolved_experiments_dir()
+    entries = sorted(
+        (d for d in experiments_dir.iterdir() if d.is_dir() and d.name.startswith("exp_")),
+        key=lambda d: d.stat().st_mtime,
+        reverse=True,
+    ) if experiments_dir.exists() else []
+
+    await svc.messaging.send_list_card(
+        receive_id=chat_id,
+        receive_id_type="chat_id",
+        entries=entries,
+    )
