@@ -537,20 +537,45 @@ class ClaudeClient:
             if tool_use_blocks:
                 tool_results = []
                 for block in tool_use_blocks:
-                    if block.name == "read_realtime_log":
-                        result_text = await handle_read_log(block.input, exp_dir)
-                    elif block.name == "save_script":
-                        result_text = await handle_save_script(block.input, exp_dir)
-                    elif block.name == "restart_experiment":
-                        result_text = "重启请求已收到，正在重启实验…"
-                        needs_restart = True
-                    else:
-                        result_text = f"Unknown tool: {block.name}"
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result_text,
-                    })
+                    try:
+                        if block.name == "read_realtime_log":
+                            result_text = await handle_read_log(block.input, exp_dir)
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": result_text,
+                            })
+                        elif block.name == "save_script":
+                            result_text = await handle_save_script(block.input, exp_dir)
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": result_text,
+                            })
+                        elif block.name == "restart_experiment":
+                            needs_restart = True
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": "重启请求已收到，正在重启实验…",
+                            })
+                        else:
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": f"Unknown tool: {block.name}",
+                            })
+                    except Exception as tool_exc:
+                        logger.warning(
+                            "Tool %r execution failed for task=%s: %s",
+                            block.name, task_id, tool_exc,
+                        )
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": f"Tool execution failed: {tool_exc}",
+                            "is_error": True,
+                        })
                 history.append({"role": "user", "content": tool_results})
 
                 # If restart was requested, break immediately so routes.py can act
