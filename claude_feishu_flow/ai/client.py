@@ -12,10 +12,11 @@ import anthropic
 from claude_feishu_flow.ai.prompt import (
     build_edit_chat_system_prompt,
     build_fix_system_prompt,
+    build_sub_agent_system_prompt,
     build_system_prompt,
     build_summarize_system_prompt,
 )
-from claude_feishu_flow.ai.tools import ALL_TOOLS, handle_save_script
+from claude_feishu_flow.ai.tools import ALL_TOOLS, SUB_AGENT_TOOLS, handle_read_log, handle_save_script
 
 logger = logging.getLogger(__name__)
 
@@ -465,3 +466,88 @@ class ClaudeClient:
             )
 
         return saved_files["main.py"]
+
+    # ------------------------------------------------------------------
+    # Sub Agent: per-experiment conversational assistant with log reading
+    # ------------------------------------------------------------------
+
+    _SUB_AGENT_MAX_ROUNDS = 5
+    _SUB_AGENT_HISTORY_TRIM_THRESHOLD = 60
+    _SUB_AGENT_HISTORY_KEEP = 40
+
+    async def chat_with_sub_agent(
+        self,
+        task_id: str,
+        user_text: str,
+        exp_dir: Path,
+        history: list[dict],
+    ) -> str:
+        """Handle a single turn of Sub Agent conversation.
+
+        The conversation history is mutated in-place so it persists across
+        calls (the caller stores it on Services.sub_agent_histories).
+
+        Args:
+            task_id:    Experiment ID (e.g. "exp_<uuid>").
+            user_text:  The user's current message.
+            exp_dir:    Path to the experiment root directory.
+            history:    Mutable list of conversation messages (mutated in place).
+
+        Returns:
+            Claude's text reply.
+        """
+        # Trim history to prevent unbounded growth
+        if len(history) > self._SUB_AGENT_HISTORY_TRIM_THRESHOLD:
+            del history[: len(history) - self._SUB_AGENT_HISTORY_KEEP]
+
+        history.append({"role": "user", "content": user_text})
+
+        system_prompt = build_sub_agent_system_prompt(task_id, str(exp_dir))
+        response = None
+
+        for round_num in range(1, self._SUB_AGENT_MAX_ROUNDS + 1):
+            logger.info("Sub agent round %d for task=%s", round_num, task_id)
+
+            response = await self._client.messages.create(
+                model=self._model,
+                max_tokens=4096,
+                system=system_prompt,
+                tools=SUB_AGENT_TOOLS,
+                messages=history,
+            )
+
+            history.append({"role": "assistant", "content": response.content})
+
+            tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
+
+            if tool_use_blocks:
+                tool_results = []
+                for block in tool_use_blocks:
+                    if block.name == "read_realtime_log":
+                        result_text = await handle_read_log(block.input, exp_dir)
+                    else:
+                        result_text = f"Unknown tool: {block.name}"
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_text,
+                    })
+                history.append({"role": "user", "content": tool_results})
+
+                # If Claude signalled end_turn alongside tool use, break after
+                # processing results (it will have text to show already).
+                if response.stop_reason == "end_turn":
+                    break
+                continue
+
+            # end_turn or max_tokens without tool use — done
+            break
+
+        # Extract text reply from the last response
+        reply_parts: list[str] = []
+        if response is not None:
+            for block in response.content:
+                if block.type == "text":
+                    reply_parts.append(block.text)
+
+        return "\n".join(reply_parts) if reply_parts else "(Sub Agent 未返回有效回复)"
