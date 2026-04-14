@@ -135,9 +135,24 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
     if retry_match:
         user_text = (user_text[:retry_match.start()] + user_text[retry_match.end():]).strip()
 
-    # Detect /edit exp_<uuid> <instruction>
-    edit_match = re.match(r'^/edit\s+(exp_[0-9a-f-]+)\s+(.*)', user_text, re.DOTALL)
-    if edit_match:
+    # Detect /edit prefix — must validate strictly before falling through
+    is_edit_mode = False
+    task_id: str
+    exp_dir: Path
+
+    if user_text.startswith("/edit"):
+        edit_match = re.match(r'^/edit\s+(exp_[0-9a-f-]+)\s+(\S.*)', user_text, re.DOTALL)
+        if not edit_match:
+            # Malformed /edit — show help card and stop
+            await svc.messaging.send_help_card(
+                receive_id=chat_id,
+                receive_id_type="chat_id",
+                error_msg=(
+                    f"无法解析 `/edit` 指令：`{user_text[:200]}`\n\n"
+                    "正确格式：`/edit exp_<uuid> <修改指令>`"
+                ),
+            )
+            return
         task_id = edit_match.group(1)
         user_text = edit_match.group(2).strip()
         exp_dir = svc.config.resolved_experiments_dir() / task_id
@@ -150,7 +165,6 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
         exp_dir = svc.config.resolved_experiments_dir() / task_id
         for sub in ("setting", "output", "results"):
             (exp_dir / sub).mkdir(parents=True, exist_ok=True)
-        is_edit_mode = False
 
     logger.info(
         "Background task started task_id=%s chat_id=%s is_edit=%s max_retries=%d exp_dir=%s",

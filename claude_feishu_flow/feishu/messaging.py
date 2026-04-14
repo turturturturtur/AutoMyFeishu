@@ -123,3 +123,54 @@ class Messaging:
             ],
         }
         return await self.send_card(receive_id, card, receive_id_type=receive_id_type)  # type: ignore[arg-type]
+
+    async def send_help_card(
+        self,
+        receive_id: str,
+        receive_id_type: str,
+        error_msg: str = "",
+    ) -> str:
+        """Send a help card showing available commands and usage.
+
+        Args:
+            receive_id:      Feishu chat_id or open_id.
+            receive_id_type: "chat_id" | "open_id" etc.
+            error_msg:       Optional error description to show at the top.
+
+        Returns:
+            Created message_id.
+        """
+        elements = []
+        if error_msg:
+            elements.append({
+                "tag": "markdown",
+                "content": f"**⚠️ 解析错误**\n{error_msg}",
+            })
+            elements.append({"tag": "hr"})
+
+        elements.append({
+            "tag": "markdown",
+            "content": (
+                "**📖 使用帮助**\n\n"
+                "**新建实验**\n"
+                "```\n<实验描述>\n```\n\n"
+                "**修改已有实验**\n"
+                "```\n/edit exp_<uuid> <修改指令>\n```\n"
+                "示例：`/edit exp_19caeba9-bfac-440a-9314-7cfe0244a165 把输出改成英文`\n\n"
+                "**自动修复模式**\n"
+                "```\n<指令> --retry <次数>\n```\n"
+                "示例：`帮我分析数据 --retry 3`\n\n"
+                "**组合使用**\n"
+                "```\n/edit exp_<uuid> <修改指令> --retry 2\n```"
+            ),
+        })
+
+        card = {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": "❓ 命令帮助"},
+                "template": "yellow",
+            },
+            "elements": elements,
+        }
+        return await self.send_card(receive_id, card, receive_id_type=receive_id_type)  # type: ignore[arg-type]
