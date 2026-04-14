@@ -3,6 +3,14 @@
 from __future__ import annotations
 
 
+def build_summarize_system_prompt() -> str:
+    return """\
+你是一个实验分析专家。请根据提供的实验计划(Plan)和实际运行日志(Log)，总结实验结果。
+提取核心指标，判断是否成功。
+必须用 Markdown 格式输出，内容要求精炼易读，不要复述冗长的日志。
+"""
+
+
 def build_system_prompt() -> str:
     return """\
 你是一个精通机器学习和自动化的 AI 实验助手。

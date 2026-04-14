@@ -62,3 +62,59 @@ class Messaging:
         message_id: str = data.get("data", {}).get("message_id", "")
         logger.info("Sent card message to %s; message_id=%s", receive_id, message_id)
         return message_id
+
+    async def send_experiment_card(
+        self,
+        receive_id: str,
+        receive_id_type: str,
+        task_id: str,
+        command: str,
+        plan_summary: str,
+        result_summary: str,
+        status: str,
+        duration: float,
+    ) -> str:
+        """Send a structured experiment report card.
+
+        Args:
+            receive_id:      Feishu chat_id or open_id.
+            receive_id_type: "chat_id" | "open_id" etc.
+            task_id:         Experiment UUID string.
+            command:         Original user instruction.
+            plan_summary:    First 500 chars of plan.md.
+            result_summary:  Claude-generated Markdown analysis.
+            status:          "success" | "failed".
+            duration:        Wall-clock execution time in seconds.
+
+        Returns:
+            Created message_id.
+        """
+        header_template = "blue" if status == "success" else "red"
+        status_emoji = "✅" if status == "success" else "❌"
+
+        element_info = {
+            "tag": "markdown",
+            "content": (
+                f"**🎯 用户指令**\n{command}\n\n"
+                f"**⏱️ 耗时:** {duration:.1f}s　|　**状态:** {status_emoji} {status}\n\n"
+                f"**📝 实验计划**\n{plan_summary}"
+            ),
+        }
+        element_analysis = {
+            "tag": "markdown",
+            "content": f"**📊 实验结果分析**\n\n{result_summary}",
+        }
+
+        card = {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": f"🧪 实验报告: {task_id}"},
+                "template": header_template,
+            },
+            "elements": [
+                element_info,
+                {"tag": "hr"},
+                element_analysis,
+            ],
+        }
+        return await self.send_card(receive_id, card, receive_id_type=receive_id_type)  # type: ignore[arg-type]

@@ -23,6 +23,7 @@ _EXPERIMENT_FIELDS: list[dict[str, Any]] = [
     {"field_name": "Stderr",     "type": 1},
     {"field_name": "PlanPath",   "type": 1},
     {"field_name": "LogPath",    "type": 1},
+    {"field_name": "ResultSummary", "type": 1},  # Claude-generated markdown analysis
 ]
 
 

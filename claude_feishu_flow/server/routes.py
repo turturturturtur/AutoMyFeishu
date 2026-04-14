@@ -16,6 +16,19 @@ from claude_feishu_flow.feishu.webhook import parse_webhook_event, verify_feishu
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+_LOG_TAIL_RUN = 4000    # chars from run.log tail fed to Claude
+_LOG_TAIL_ERR = 1000    # chars from error.log tail fed to Claude
+_PLAN_CARD_MAX = 500    # chars of plan.md shown in card summary
+
+
+def _tail_file(path: Path, max_chars: int) -> str:
+    """Read the last *max_chars* characters of a file; return '' if missing."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        return text[-max_chars:] if len(text) > max_chars else text
+    except FileNotFoundError:
+        return ""
+
 
 # ---------------------------------------------------------------------------
 # Webhook entry point — must return HTTP 200 within ~50ms
@@ -135,11 +148,10 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
         logger.info("Phase A complete: script_path=%s", script_path)
 
         # ── Phase B: Execution ────────────────────────────────────────────
-        plan_path = str(exp_dir / "setting" / "plan.md")
         await notify(
             f"实验脚本已生成，正在后台执行...\n"
             f"实验 ID：{task_id}\n"
-            f"计划文件：{plan_path}"
+            f"计划文件：{exp_dir / 'setting' / 'plan.md'}"
         )
 
         result = await svc.executor.run(exp_dir)
@@ -150,31 +162,57 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
             status, result.returncode, result.duration_seconds,
         )
 
-        # ── Write to Bitable ──────────────────────────────────────────────
+        # ── Phase C: AI Analysis + Card ───────────────────────────────────
+        await notify("正在用 AI 分析实验结果，请稍候...")
+
+        plan_path = exp_dir / "setting" / "plan.md"
+        plan_text = _tail_file(plan_path, 99999)  # full plan for Claude
+
+        run_log = _tail_file(exp_dir / "output" / "run.log", _LOG_TAIL_RUN)
+        err_log = _tail_file(exp_dir / "output" / "error.log", _LOG_TAIL_ERR)
+        log_text = ""
+        if run_log:
+            log_text += f"### stdout (run.log)\n{run_log}\n\n"
+        if err_log:
+            log_text += f"### stderr (error.log)\n{err_log}\n"
+        if not log_text:
+            log_text = "(无日志输出)"
+
+        summary_md = await svc.claude.summarize_experiment(plan_text, log_text)
+        logger.info("Phase C: AI summary generated (%d chars)", len(summary_md))
+
+        # Write summary to results/summary.md
+        summary_path = exp_dir / "results" / "summary.md"
+        summary_path.write_text(summary_md, encoding="utf-8")
+        logger.info("Phase C: summary written to %s", summary_path)
+
+        # Write to Bitable
         record_id = await svc.bitable.append_record({
-            "Command":    user_text[:2000],
-            "TaskID":     task_id,
-            "ScriptPath": script_path,
-            "Status":     status,
-            "Duration_s": round(result.duration_seconds, 2),
-            "Stdout":     result.stdout[:2000],
-            "Stderr":     result.stderr[:500],
-            "PlanPath":   plan_path,
-            "LogPath":    result.run_log_path,
+            "Command":       user_text[:2000],
+            "TaskID":        task_id,
+            "ScriptPath":    script_path,
+            "Status":        status,
+            "Duration_s":    round(result.duration_seconds, 2),
+            "Stdout":        result.stdout[:2000],
+            "Stderr":        result.stderr[:500],
+            "PlanPath":      str(plan_path),
+            "LogPath":       result.run_log_path,
+            "ResultSummary": summary_md[:5000],
         })
         logger.info("Bitable record written: %s", record_id)
 
-        # ── Notify user ───────────────────────────────────────────────────
-        stdout_preview = result.stdout.strip()[:500] or "(无输出)"
-        emoji = "✅" if result.success else "❌"
-        summary = (
-            f"{emoji} 实验完成！\n"
-            f"状态：{status}  |  耗时：{result.duration_seconds:.1f}s  |  退出码：{result.returncode}\n"
-            f"记录 ID：{record_id}\n"
-            f"日志路径：{result.run_log_path}\n\n"
-            f"输出预览：\n{stdout_preview}"
+        # Send experiment card
+        plan_summary = plan_text[:_PLAN_CARD_MAX] if plan_text else "(计划文件不存在)"
+        await svc.messaging.send_experiment_card(
+            receive_id=chat_id,
+            receive_id_type="chat_id",
+            task_id=task_id,
+            command=user_text[:200],
+            plan_summary=plan_summary,
+            result_summary=summary_md,
+            status=status,
+            duration=result.duration_seconds,
         )
-        await notify(summary)
 
     except asyncio.TimeoutError:
         logger.error("Task %s timed out", task_id)

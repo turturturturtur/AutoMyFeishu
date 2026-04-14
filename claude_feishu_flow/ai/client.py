@@ -8,7 +8,7 @@ from typing import Optional
 
 import anthropic
 
-from claude_feishu_flow.ai.prompt import build_system_prompt
+from claude_feishu_flow.ai.prompt import build_system_prompt, build_summarize_system_prompt
 from claude_feishu_flow.ai.tools import ALL_TOOLS, handle_save_script
 
 logger = logging.getLogger(__name__)
@@ -143,3 +143,30 @@ class ClaudeClient:
             )
 
         return saved_files["main.py"]
+
+    async def summarize_experiment(self, plan_text: str, log_text: str) -> str:
+        """Ask Claude to summarize experiment results (no tool use).
+
+        Args:
+            plan_text: Content of plan.md (experiment design).
+            log_text:  Truncated run + error logs (up to ~5000 chars).
+
+        Returns:
+            Markdown-formatted summary string.
+        """
+        response = await self._client.messages.create(
+            model=self._model,
+            max_tokens=2048,
+            system=build_summarize_system_prompt(),
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"## 实验计划 (Plan)\n\n{plan_text}\n\n"
+                    f"## 运行日志 (Log)\n\n{log_text}"
+                ),
+            }],
+        )
+        for block in response.content:
+            if block.type == "text":
+                return block.text
+        return "(Claude 未返回有效摘要)"
