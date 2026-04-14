@@ -138,15 +138,30 @@ def verify_feishu_signature_v2(
 def parse_webhook_event(raw: dict) -> WebhookEvent:
     """Parse a raw Feishu webhook payload into a typed WebhookEvent.
 
-    Handles two schemas:
+    Handles three schemas:
     1. URL verification challenge  (schema_v1 / v2 both use top-level "challenge")
-    2. im.message.receive_v1       (schema_v2: raw["header"]["event_type"])
+    2. Card action callback        (flat format: top-level "action" + "open_id")
+    3. im.message.receive_v1       (schema_v2: raw["header"]["event_type"])
     """
     # --- URL verification (one-time setup) ---
     if "challenge" in raw:
         return WebhookEvent(
             event_type="url_verification",
             challenge=raw["challenge"],
+            raw=raw,
+        )
+
+    # --- Flat card action callback (no header/event wrapper) ──────────
+    # Feishu card interaction callbacks arrive with top-level "action"
+    # and "open_id" fields, WITHOUT the v2 header/event envelope.
+    if "action" in raw and "header" not in raw:
+        action: dict = raw.get("action", {})
+        return WebhookEvent(
+            event_type="card.action.trigger",
+            open_id=raw.get("open_id"),
+            action_tag=action.get("tag"),
+            action_value=action.get("value", {}),
+            action_chat_id=raw.get("open_chat_id"),
             raw=raw,
         )
 

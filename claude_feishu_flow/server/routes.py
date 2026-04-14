@@ -93,6 +93,12 @@ async def feishu_webhook(
 
     # ── Card action events (interactive card button clicks) ──────────────
     if event.event_type == "card.action.trigger":
+        # Flat card callbacks include a token field for verification
+        card_token = raw.get("token", "")
+        if card_token and card_token != svc.config.feishu_verification_token:
+            logger.warning("Card callback token mismatch")
+            return JSONResponse({"code": 40001, "msg": "invalid token"}, status_code=401)
+
         action_value: dict = event.action_value
         action_key: str = action_value.get("key", "")
 
