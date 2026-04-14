@@ -13,7 +13,7 @@ from claude_feishu_flow.ai.tools import ALL_TOOLS, handle_save_script
 
 logger = logging.getLogger(__name__)
 
-_MAX_ROUNDS = 8  # safety cap; script generation typically finishes in 2 rounds
+_MAX_ROUNDS = 12  # raised to accommodate max_tokens continuation rounds
 
 
 class ClaudeClient:
@@ -66,6 +66,14 @@ class ClaudeClient:
         Runs the agentic tool-use loop until Claude saves main.py or
         exhausts max_rounds. Claude is expected to save plan.md first, then main.py.
 
+        Handles three stop_reason cases per round:
+          - "end_turn"   : Claude finished naturally; exit loop.
+          - "tool_use"   : Execute all tool_use blocks found in content, send results.
+                           Also triggered when stop_reason is "max_tokens" but the
+                           content still contains tool_use blocks (partial tool call).
+          - "max_tokens" : No tool_use blocks — Claude was mid-text. Append a
+                           continuation prompt so it finishes the current output.
+
         Args:
             user_text:     The user's instruction from Feishu.
             workspace_dir: Path to the experiment root directory (Experiments/exp_<uuid>/).
@@ -85,7 +93,7 @@ class ClaudeClient:
 
             response = await self._client.messages.create(
                 model=self._model,
-                max_tokens=4096,
+                max_tokens=8192,
                 system=build_system_prompt(),
                 tools=ALL_TOOLS,
                 messages=messages,
@@ -98,18 +106,18 @@ class ClaudeClient:
                 len(response.content),
             )
 
-            # Append Claude's full response to the conversation
+            # Always append Claude's full response to conversation history first
             messages.append({"role": "assistant", "content": response.content})
 
-            if response.stop_reason == "end_turn":
-                break
+            # Collect any tool_use blocks regardless of stop_reason —
+            # max_tokens can fire mid-tool-call, leaving a tool_use block
+            # without a corresponding tool_result, which Anthropic rejects.
+            tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
 
-            if response.stop_reason == "tool_use":
+            if tool_use_blocks:
+                # Execute every tool_use block and build tool_result list
                 tool_results = []
-                for block in response.content:
-                    if block.type != "tool_use":
-                        continue
-
+                for block in tool_use_blocks:
                     tool_name: str = block.name
                     tool_input: dict = block.input
                     tool_use_id: str = block.id
@@ -131,10 +139,27 @@ class ClaudeClient:
 
                 messages.append({"role": "user", "content": tool_results})
 
-                # Only exit once main.py has been saved (plan.md may or may not precede it)
                 if "main.py" in saved_files:
-                    logger.info("main.py saved; ending tool loop. saved_files=%s", list(saved_files.keys()))
+                    logger.info(
+                        "main.py saved; ending tool loop. saved_files=%s",
+                        list(saved_files.keys()),
+                    )
                     break
+
+            elif response.stop_reason == "max_tokens":
+                # Pure text truncation — no tool calls. Ask Claude to continue.
+                logger.warning(
+                    "Round %d hit max_tokens with no tool_use blocks; sending continuation prompt",
+                    round_num,
+                )
+                messages.append({
+                    "role": "user",
+                    "content": [{"type": "text", "text": "请继续"}],
+                })
+
+            else:
+                # stop_reason == "end_turn" (or unexpected value) — nothing left to do
+                break
 
         if "main.py" not in saved_files:
             raise RuntimeError(
@@ -156,7 +181,7 @@ class ClaudeClient:
         """
         response = await self._client.messages.create(
             model=self._model,
-            max_tokens=2048,
+            max_tokens=4096,
             system=build_summarize_system_prompt(),
             messages=[{
                 "role": "user",
