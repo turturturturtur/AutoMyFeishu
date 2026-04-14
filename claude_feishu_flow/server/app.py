@@ -89,3 +89,10 @@ def create_app(config: Config) -> FastAPI:
     app.include_router(router)
 
     return app
+
+
+def create_app_from_env() -> FastAPI:
+    """Uvicorn-compatible factory: loads Config from environment/.env, then calls create_app."""
+    logging.basicConfig(level=logging.INFO)
+    config = Config()
+    return create_app(config)
