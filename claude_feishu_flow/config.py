@@ -32,14 +32,14 @@ class Config(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8080
 
-    # Workspace directory (each task gets its own subdirectory task_<uuid>)
-    workspaces_dir: str = "./workspaces"
+    # Experiments directory (each experiment gets its own subdirectory exp_<uuid>)
+    experiments_dir: str = "./Experiments"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
-    def resolved_workspaces_dir(self) -> Path:
-        """Return the workspaces directory as an absolute Path, creating it if needed."""
-        path = Path(self.workspaces_dir).resolve()
+    def resolved_experiments_dir(self) -> Path:
+        """Return the experiments directory as an absolute Path, creating it if needed."""
+        path = Path(self.experiments_dir).resolve()
         path.mkdir(parents=True, exist_ok=True)
         return path
 

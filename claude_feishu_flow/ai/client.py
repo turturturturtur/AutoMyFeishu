@@ -35,7 +35,7 @@ class ClaudeClient:
 
         script_path = await client.generate_experiment(
             user_text="帮我写一个打印 hello 的脚本",
-            workspace_dir=Path("./workspaces/task_<uuid>"),
+            workspace_dir=Path("./Experiments/exp_<uuid>"),
         )
     """
 
@@ -49,32 +49,36 @@ class ClaudeClient:
         kwargs: dict = {"api_key": api_key}
         if base_url:
             kwargs["base_url"] = base_url
-            logger.info("ClaudeClient initialised with custom base_url: %s", base_url)
         self._client = anthropic.AsyncAnthropic(**kwargs)
+        logger.info(
+            "ClaudeClient ready — model=%s  base_url=%s",
+            self._model,
+            base_url or "(official Anthropic API)",
+        )
 
     async def generate_experiment(
         self,
         user_text: str,
         workspace_dir: Path,
     ) -> str:
-        """Ask Claude to generate an experiment script and save it via save_script.
+        """Ask Claude to generate plan.md and main.py, saving both via save_script.
 
-        Runs the agentic tool-use loop until Claude calls save_script or
-        exhausts max_rounds.
+        Runs the agentic tool-use loop until Claude saves main.py or
+        exhausts max_rounds. Claude is expected to save plan.md first, then main.py.
 
         Args:
             user_text:     The user's instruction from Feishu.
-            workspace_dir: Path to the task-specific workspace directory.
-                           The save_script handler will create it if needed.
+            workspace_dir: Path to the experiment root directory (Experiments/exp_<uuid>/).
+                           Files are saved to workspace_dir/setting/ by the handler.
 
         Returns:
-            Absolute path of the saved script.
+            Absolute path of the saved main.py script.
 
         Raises:
-            RuntimeError: If Claude never calls save_script within max_rounds.
+            RuntimeError: If Claude never saves main.py within max_rounds.
         """
         messages: list[dict] = [{"role": "user", "content": user_text}]
-        saved_path: Optional[str] = None
+        saved_files: dict[str, str] = {}  # filename -> abs_path
 
         for round_num in range(1, _MAX_ROUNDS + 1):
             logger.info("Claude round %d — sending %d messages", round_num, len(messages))
@@ -110,11 +114,11 @@ class ClaudeClient:
                     tool_input: dict = block.input
                     tool_use_id: str = block.id
 
-                    logger.info("Tool call: %s input=%s", tool_name, list(tool_input.keys()))
+                    logger.info("Tool call: %s filename=%s", tool_name, tool_input.get("filename"))
 
                     if tool_name == "save_script":
                         result_text = await handle_save_script(tool_input, workspace_dir)
-                        saved_path = result_text
+                        saved_files[tool_input["filename"]] = result_text
                     else:
                         result_text = f"Unknown tool: {tool_name}"
                         logger.warning("Received unknown tool call: %s", tool_name)
@@ -127,14 +131,15 @@ class ClaudeClient:
 
                 messages.append({"role": "user", "content": tool_results})
 
-                if saved_path is not None:
-                    logger.info("save_script completed; ending tool loop early")
+                # Only exit once main.py has been saved (plan.md may or may not precede it)
+                if "main.py" in saved_files:
+                    logger.info("main.py saved; ending tool loop. saved_files=%s", list(saved_files.keys()))
                     break
 
-        if saved_path is None:
+        if "main.py" not in saved_files:
             raise RuntimeError(
-                f"Claude did not call save_script within {_MAX_ROUNDS} rounds. "
+                f"Claude did not save main.py within {_MAX_ROUNDS} rounds. "
                 "Check the system prompt or model response."
             )
 
-        return saved_path
+        return saved_files["main.py"]

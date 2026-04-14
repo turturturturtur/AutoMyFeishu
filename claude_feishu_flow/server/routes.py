@@ -103,15 +103,20 @@ async def feishu_webhook(
 async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
     """Full two-phase pipeline:
 
-    Phase A (Generation) — Claude generates and saves the script.
-    Phase B (Execution)  — Python runs it, writes results to Bitable, notifies user.
+    Phase A (Generation) — Claude generates plan.md and main.py in setting/.
+    Phase B (Execution)  — Python runs setting/main.py, writes logs to output/.
+    Phase C (Reporting)  — Results written to Bitable, user notified.
     """
     chat_id: str = event.chat_id or ""
     user_text: str = event.text or ""
-    task_id = str(uuid.uuid4())
-    workspace_dir = svc.config.resolved_workspaces_dir() / f"task_{task_id}"
+    task_id = f"exp_{uuid.uuid4()}"
+    exp_dir = svc.config.resolved_experiments_dir() / task_id
 
-    logger.info("Background task started task_id=%s chat_id=%s", task_id, chat_id)
+    # Create the three-level directory structure upfront
+    for sub in ("setting", "output", "results"):
+        (exp_dir / sub).mkdir(parents=True, exist_ok=True)
+
+    logger.info("Background task started task_id=%s chat_id=%s exp_dir=%s", task_id, chat_id, exp_dir)
 
     async def notify(text: str) -> None:
         try:
@@ -121,18 +126,23 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
 
     try:
         # ── Phase A: Generation ───────────────────────────────────────────
-        await notify("正在理解需求，生成实验脚本，请稍候...")
+        await notify("正在理解需求，生成实验计划和脚本，请稍候...")
 
         script_path = await svc.claude.generate_experiment(
             user_text=user_text,
-            workspace_dir=workspace_dir,
+            workspace_dir=exp_dir,
         )
         logger.info("Phase A complete: script_path=%s", script_path)
 
         # ── Phase B: Execution ────────────────────────────────────────────
-        await notify(f"🚀 实验脚本已生成，正在后台执行...\n文件：{Path(script_path).name}")
+        plan_path = str(exp_dir / "setting" / "plan.md")
+        await notify(
+            f"实验脚本已生成，正在后台执行...\n"
+            f"实验 ID：{task_id}\n"
+            f"计划文件：{plan_path}"
+        )
 
-        result = await svc.executor.run(script_path)
+        result = await svc.executor.run(exp_dir)
 
         status = "success" if result.success else "failed"
         logger.info(
@@ -149,6 +159,8 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
             "Duration_s": round(result.duration_seconds, 2),
             "Stdout":     result.stdout[:2000],
             "Stderr":     result.stderr[:500],
+            "PlanPath":   plan_path,
+            "LogPath":    result.run_log_path,
         })
         logger.info("Bitable record written: %s", record_id)
 
@@ -158,7 +170,8 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
         summary = (
             f"{emoji} 实验完成！\n"
             f"状态：{status}  |  耗时：{result.duration_seconds:.1f}s  |  退出码：{result.returncode}\n"
-            f"记录 ID：{record_id}\n\n"
+            f"记录 ID：{record_id}\n"
+            f"日志路径：{result.run_log_path}\n\n"
             f"输出预览：\n{stdout_preview}"
         )
         await notify(summary)

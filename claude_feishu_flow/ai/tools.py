@@ -1,7 +1,7 @@
 """Claude tool definitions for the experiment assistant.
 
 Only one tool is needed for the generation phase:
-  save_script — write generated code to an isolated task workspace.
+  save_script — write generated files (plan.md, main.py) to the experiment's setting/ directory.
 """
 
 from __future__ import annotations
@@ -18,8 +18,10 @@ logger = logging.getLogger(__name__)
 SAVE_SCRIPT_TOOL: dict = {
     "name": "save_script",
     "description": (
-        "Save the generated Python experiment script to disk. "
-        "Call this tool once you have finished writing the complete code. "
+        "Save a file to the experiment's setting/ directory. "
+        "You MUST call this tool twice: first with filename='plan.md' to write the experiment plan, "
+        "then with filename='main.py' to write the executable Python script. "
+        "Both files are saved under setting/ inside the experiment directory. "
         "Returns the absolute path of the saved file."
     ),
     "input_schema": {
@@ -27,11 +29,11 @@ SAVE_SCRIPT_TOOL: dict = {
         "properties": {
             "filename": {
                 "type": "string",
-                "description": "Filename for the script, e.g. 'main.py'.",
+                "description": "Filename to save: 'plan.md' for the experiment plan, 'main.py' for the Python script.",
             },
             "code": {
                 "type": "string",
-                "description": "Complete, self-contained Python source code.",
+                "description": "Complete file content: markdown text for plan.md, or Python source code for main.py.",
             },
         },
         "required": ["filename", "code"],
@@ -45,13 +47,13 @@ ALL_TOOLS: list[dict] = [SAVE_SCRIPT_TOOL]
 # Tool handler
 # ---------------------------------------------------------------------------
 
-async def handle_save_script(inputs: dict, workspace_dir: Path) -> str:
-    """Write the generated code to workspace_dir/<filename>.
+async def handle_save_script(inputs: dict, experiment_dir: Path) -> str:
+    """Write the generated file to experiment_dir/setting/<filename>.
 
     Args:
-        inputs:        The tool input dict from Claude (must contain 'filename' and 'code').
-        workspace_dir: The task-specific directory (workspaces/task_<uuid>/).
-                       Created if it does not exist.
+        inputs:          The tool input dict from Claude (must contain 'filename' and 'code').
+        experiment_dir:  The experiment root directory (Experiments/exp_<uuid>/).
+                         The setting/ subdirectory is created if it does not exist.
 
     Returns:
         Absolute path of the saved file as a string.
@@ -59,8 +61,9 @@ async def handle_save_script(inputs: dict, workspace_dir: Path) -> str:
     filename: str = inputs["filename"]
     code: str = inputs["code"]
 
-    workspace_dir.mkdir(parents=True, exist_ok=True)
-    script_path = workspace_dir / filename
+    setting_dir = experiment_dir / "setting"
+    setting_dir.mkdir(parents=True, exist_ok=True)
+    script_path = setting_dir / filename
     script_path.write_text(code, encoding="utf-8")
 
     abs_path = str(script_path.resolve())

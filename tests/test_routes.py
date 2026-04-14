@@ -99,7 +99,9 @@ def _make_services(config=None) -> Services:
 
     executor = AsyncMock(spec=ScriptExecutor)
     executor.run = AsyncMock(return_value=ExecutionResult(
-        returncode=0, stdout="hello\n", stderr="", duration_seconds=1.0
+        returncode=0, stdout="hello\n", stderr="", duration_seconds=1.0,
+        run_log_path="/tmp/exp_x/output/run.log",
+        error_log_path="/tmp/exp_x/output/error.log",
     ))
 
     return Services(

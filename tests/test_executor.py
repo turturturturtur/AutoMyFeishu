@@ -11,10 +11,13 @@ import pytest
 from claude_feishu_flow.runner.executor import ExecutionResult, ScriptExecutor
 
 
-def _write_script(tmp_path: Path, name: str, code: str) -> str:
-    p = tmp_path / name
-    p.write_text(textwrap.dedent(code), encoding="utf-8")
-    return str(p)
+def _make_experiment_dir(tmp_path: Path, code: str, name: str = "exp_test") -> Path:
+    """Create a minimal experiment directory with setting/main.py."""
+    exp_dir = tmp_path / name
+    setting_dir = exp_dir / "setting"
+    setting_dir.mkdir(parents=True)
+    (setting_dir / "main.py").write_text(textwrap.dedent(code), encoding="utf-8")
+    return exp_dir
 
 
 # ---------------------------------------------------------------------------
@@ -23,10 +26,8 @@ def _write_script(tmp_path: Path, name: str, code: str) -> str:
 
 @pytest.mark.asyncio
 async def test_run_captures_stdout(tmp_path: Path):
-    script = _write_script(tmp_path, "hello.py", """\
-        print("hello world")
-    """)
-    result = await ScriptExecutor().run(script)
+    exp_dir = _make_experiment_dir(tmp_path, 'print("hello world")\n')
+    result = await ScriptExecutor().run(exp_dir)
 
     assert result.returncode == 0
     assert "hello world" in result.stdout
@@ -35,11 +36,11 @@ async def test_run_captures_stdout(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_run_captures_stderr(tmp_path: Path):
-    script = _write_script(tmp_path, "err.py", """\
+    exp_dir = _make_experiment_dir(tmp_path, """\
         import sys
         sys.stderr.write("oops\\n")
-    """)
-    result = await ScriptExecutor().run(script)
+    """, "exp_stderr")
+    result = await ScriptExecutor().run(exp_dir)
 
     assert result.returncode == 0
     assert "oops" in result.stderr
@@ -47,11 +48,11 @@ async def test_run_captures_stderr(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_run_nonzero_returncode(tmp_path: Path):
-    script = _write_script(tmp_path, "fail.py", """\
+    exp_dir = _make_experiment_dir(tmp_path, """\
         import sys
         sys.exit(42)
-    """)
-    result = await ScriptExecutor().run(script)
+    """, "exp_fail")
+    result = await ScriptExecutor().run(exp_dir)
 
     assert result.returncode == 42
     assert result.success is False
@@ -59,11 +60,11 @@ async def test_run_nonzero_returncode(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_run_captures_multiline_stdout(tmp_path: Path):
-    script = _write_script(tmp_path, "multi.py", """\
+    exp_dir = _make_experiment_dir(tmp_path, """\
         for i in range(5):
             print(f"line {i}")
-    """)
-    result = await ScriptExecutor().run(script)
+    """, "exp_multi")
+    result = await ScriptExecutor().run(exp_dir)
 
     assert result.returncode == 0
     for i in range(5):
@@ -72,8 +73,8 @@ async def test_run_captures_multiline_stdout(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_run_records_duration(tmp_path: Path):
-    script = _write_script(tmp_path, "dur.py", "pass\n")
-    result = await ScriptExecutor().run(script)
+    exp_dir = _make_experiment_dir(tmp_path, "pass\n", "exp_dur")
+    result = await ScriptExecutor().run(exp_dir)
 
     assert result.duration_seconds >= 0.0
 
@@ -81,13 +82,43 @@ async def test_run_records_duration(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_run_exception_in_script(tmp_path: Path):
     """A script that raises an exception exits with returncode 1 and stderr."""
-    script = _write_script(tmp_path, "exc.py", """\
+    exp_dir = _make_experiment_dir(tmp_path, """\
         raise ValueError("deliberate error")
-    """)
-    result = await ScriptExecutor().run(script)
+    """, "exp_exc")
+    result = await ScriptExecutor().run(exp_dir)
 
     assert result.returncode != 0
     assert "ValueError" in result.stderr
+
+
+@pytest.mark.asyncio
+async def test_run_writes_log_files(tmp_path: Path):
+    """stdout/stderr are written to output/run.log and output/error.log."""
+    exp_dir = _make_experiment_dir(tmp_path, """\
+        import sys
+        print("stdout line")
+        sys.stderr.write("stderr line\\n")
+    """, "exp_logs")
+    result = await ScriptExecutor().run(exp_dir)
+
+    assert Path(result.run_log_path).read_text() == result.stdout
+    assert Path(result.error_log_path).read_text() == result.stderr
+    assert "stdout line" in Path(result.run_log_path).read_text()
+    assert "stderr line" in Path(result.error_log_path).read_text()
+
+
+@pytest.mark.asyncio
+async def test_run_cwd_is_experiment_dir(tmp_path: Path):
+    """The subprocess cwd is the experiment root, so relative paths land there."""
+    exp_dir = _make_experiment_dir(tmp_path, """\
+        with open("results/output.txt", "w") as f:
+            f.write("artifact")
+    """, "exp_cwd")
+    (exp_dir / "results").mkdir()
+    result = await ScriptExecutor().run(exp_dir)
+
+    assert result.returncode == 0
+    assert (exp_dir / "results" / "output.txt").read_text() == "artifact"
 
 
 # ---------------------------------------------------------------------------
@@ -97,19 +128,19 @@ async def test_run_exception_in_script(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_run_timeout_kills_process(tmp_path: Path):
     """Script that sleeps longer than timeout raises asyncio.TimeoutError."""
-    script = _write_script(tmp_path, "slow.py", """\
+    exp_dir = _make_experiment_dir(tmp_path, """\
         import time
         time.sleep(60)
-    """)
+    """, "exp_slow")
     with pytest.raises(asyncio.TimeoutError):
-        await ScriptExecutor().run(script, timeout=0.5)
+        await ScriptExecutor().run(exp_dir, timeout=0.5)
 
 
 @pytest.mark.asyncio
 async def test_run_completes_within_timeout(tmp_path: Path):
     """Fast script completes successfully even with a short timeout."""
-    script = _write_script(tmp_path, "fast.py", 'print("done")\n')
-    result = await ScriptExecutor(default_timeout=5.0).run(script)
+    exp_dir = _make_experiment_dir(tmp_path, 'print("done")\n', "exp_fast")
+    result = await ScriptExecutor(default_timeout=5.0).run(exp_dir)
 
     assert result.returncode == 0
     assert "done" in result.stdout
@@ -120,10 +151,16 @@ async def test_run_completes_within_timeout(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 def test_execution_result_success_true():
-    r = ExecutionResult(returncode=0, stdout="", stderr="", duration_seconds=1.0)
+    r = ExecutionResult(
+        returncode=0, stdout="", stderr="", duration_seconds=1.0,
+        run_log_path="/tmp/run.log", error_log_path="/tmp/error.log",
+    )
     assert r.success is True
 
 
 def test_execution_result_success_false():
-    r = ExecutionResult(returncode=1, stdout="", stderr="err", duration_seconds=0.1)
+    r = ExecutionResult(
+        returncode=1, stdout="", stderr="err", duration_seconds=0.1,
+        run_log_path="/tmp/run.log", error_log_path="/tmp/error.log",
+    )
     assert r.success is False

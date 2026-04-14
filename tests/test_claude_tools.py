@@ -14,33 +14,36 @@ import pytest
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_save_script_writes_file(tmp_path: Path):
+async def test_save_script_writes_to_setting_subdir(tmp_path: Path):
     from claude_feishu_flow.ai.tools import handle_save_script
 
     code = "print('hello')\n"
+    exp_dir = tmp_path / "exp_abc"
     result = await handle_save_script(
         {"filename": "main.py", "code": code},
-        workspace_dir=tmp_path / "task_abc",
+        experiment_dir=exp_dir,
     )
 
     saved = Path(result)
     assert saved.exists()
     assert saved.read_text() == code
     assert saved.name == "main.py"
-    assert "task_abc" in result
+    # File must be inside setting/ subdirectory
+    assert saved.parent.name == "setting"
+    assert "exp_abc" in result
 
 
 @pytest.mark.asyncio
-async def test_save_script_creates_missing_dir(tmp_path: Path):
+async def test_save_script_creates_setting_dir(tmp_path: Path):
     from claude_feishu_flow.ai.tools import handle_save_script
 
-    workspace = tmp_path / "new_dir" / "nested"
-    assert not workspace.exists()
+    exp_dir = tmp_path / "new_exp" / "nested"
+    assert not exp_dir.exists()
 
-    await handle_save_script({"filename": "exp.py", "code": "x=1\n"}, workspace)
+    await handle_save_script({"filename": "plan.md", "code": "# plan\n"}, exp_dir)
 
-    assert workspace.exists()
-    assert (workspace / "exp.py").exists()
+    assert (exp_dir / "setting").exists()
+    assert (exp_dir / "setting" / "plan.md").exists()
 
 
 @pytest.mark.asyncio
@@ -49,7 +52,7 @@ async def test_save_script_returns_absolute_path(tmp_path: Path):
 
     result = await handle_save_script(
         {"filename": "main.py", "code": "pass\n"},
-        workspace_dir=tmp_path,
+        experiment_dir=tmp_path,
     )
     assert Path(result).is_absolute()
 
@@ -84,13 +87,42 @@ def _make_response(stop_reason: str, content: list):
 
 
 @pytest.mark.asyncio
-async def test_generate_experiment_calls_save_script(tmp_path: Path):
-    """Claude returns tool_use → save_script is called → path returned."""
+async def test_generate_experiment_saves_main_py(tmp_path: Path):
+    """Claude saves plan.md then main.py → main.py path returned."""
     from claude_feishu_flow.ai.client import ClaudeClient
 
-    # Round 1: Claude calls save_script
+    # Round 1: Claude saves plan.md
     round1 = _make_response("tool_use", [
-        _make_tool_use_block("tu_001", "main.py", "print('hi')\n"),
+        _make_tool_use_block("tu_001", "plan.md", "# plan\n"),
+    ])
+    # Round 2: Claude saves main.py
+    round2 = _make_response("tool_use", [
+        _make_tool_use_block("tu_002", "main.py", "print('hi')\n"),
+    ])
+
+    mock_create = AsyncMock(side_effect=[round1, round2])
+
+    with patch("anthropic.AsyncAnthropic") as MockAnthropic:
+        instance = MockAnthropic.return_value
+        instance.messages = MagicMock()
+        instance.messages.create = mock_create
+
+        client = ClaudeClient(api_key="test-key")
+        workspace = tmp_path / "exp_test"
+        result = await client.generate_experiment("write hello script", workspace)
+
+    assert Path(result).name == "main.py"
+    assert (workspace / "setting" / "main.py").read_text() == "print('hi')\n"
+    assert (workspace / "setting" / "plan.md").read_text() == "# plan\n"
+
+
+@pytest.mark.asyncio
+async def test_generate_experiment_only_main_py(tmp_path: Path):
+    """Claude skips plan.md and only saves main.py — still completes successfully."""
+    from claude_feishu_flow.ai.client import ClaudeClient
+
+    round1 = _make_response("tool_use", [
+        _make_tool_use_block("tu_003", "main.py", "print('world')\n"),
     ])
 
     mock_create = AsyncMock(return_value=round1)
@@ -101,12 +133,10 @@ async def test_generate_experiment_calls_save_script(tmp_path: Path):
         instance.messages.create = mock_create
 
         client = ClaudeClient(api_key="test-key")
-        workspace = tmp_path / "task_test"
-        result = await client.generate_experiment("write hello script", workspace)
+        workspace = tmp_path / "exp_only_main"
+        result = await client.generate_experiment("write world script", workspace)
 
-    assert Path(result).name == "main.py"
-    assert (workspace / "main.py").read_text() == "print('hi')\n"
-    assert mock_create.call_count == 1
+    assert (workspace / "setting" / "main.py").read_text() == "print('world')\n"
 
 
 @pytest.mark.asyncio
@@ -116,7 +146,7 @@ async def test_generate_experiment_handles_text_then_tool(tmp_path: Path):
 
     round1 = _make_response("tool_use", [
         _make_text_block("Here is the script:"),
-        _make_tool_use_block("tu_002", "main.py", "print('world')\n"),
+        _make_tool_use_block("tu_004", "main.py", "print('world')\n"),
     ])
 
     mock_create = AsyncMock(return_value=round1)
@@ -127,15 +157,15 @@ async def test_generate_experiment_handles_text_then_tool(tmp_path: Path):
         instance.messages.create = mock_create
 
         client = ClaudeClient(api_key="test-key")
-        workspace = tmp_path / "task_text_tool"
+        workspace = tmp_path / "exp_text_tool"
         result = await client.generate_experiment("write world script", workspace)
 
-    assert (tmp_path / "task_text_tool" / "main.py").read_text() == "print('world')\n"
+    assert (workspace / "setting" / "main.py").read_text() == "print('world')\n"
 
 
 @pytest.mark.asyncio
-async def test_generate_experiment_raises_if_no_tool_call(tmp_path: Path):
-    """RuntimeError raised when Claude never calls save_script."""
+async def test_generate_experiment_raises_if_no_main_py(tmp_path: Path):
+    """RuntimeError raised when Claude never saves main.py."""
     from claude_feishu_flow.ai.client import ClaudeClient
 
     # Claude always returns end_turn with only text
@@ -148,7 +178,7 @@ async def test_generate_experiment_raises_if_no_tool_call(tmp_path: Path):
         instance.messages.create = mock_create
 
         client = ClaudeClient(api_key="test-key")
-        with pytest.raises(RuntimeError, match="did not call save_script"):
+        with pytest.raises(RuntimeError, match="did not save main.py"):
             await client.generate_experiment("do nothing", tmp_path / "t")
 
 
@@ -159,7 +189,7 @@ async def test_generate_experiment_system_prompt_included(tmp_path: Path):
     from claude_feishu_flow.ai.prompt import build_system_prompt
 
     round1 = _make_response("tool_use", [
-        _make_tool_use_block("tu_003", "main.py", "x=1\n"),
+        _make_tool_use_block("tu_005", "main.py", "x=1\n"),
     ])
     mock_create = AsyncMock(return_value=round1)
 
@@ -182,7 +212,7 @@ async def test_generate_experiment_tools_schema_passed(tmp_path: Path):
     from claude_feishu_flow.ai.tools import ALL_TOOLS
 
     round1 = _make_response("tool_use", [
-        _make_tool_use_block("tu_004", "main.py", "pass\n"),
+        _make_tool_use_block("tu_006", "main.py", "pass\n"),
     ])
     mock_create = AsyncMock(return_value=round1)
 

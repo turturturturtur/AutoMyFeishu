@@ -21,6 +21,8 @@ _EXPERIMENT_FIELDS: list[dict[str, Any]] = [
     {"field_name": "Duration_s", "type": 2},
     {"field_name": "Stdout",     "type": 1},
     {"field_name": "Stderr",     "type": 1},
+    {"field_name": "PlanPath",   "type": 1},
+    {"field_name": "LogPath",    "type": 1},
 ]
 
 
