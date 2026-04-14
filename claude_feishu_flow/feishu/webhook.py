@@ -79,6 +79,10 @@ class WebhookEvent:
     text: Optional[str] = None
     message_type: Optional[str] = None  # "text" | "image" | ...
     image_keys: list = field(default_factory=list)  # image_key values for message_type == "image"
+    # card.action.trigger fields (button clicks on interactive cards)
+    action_tag: Optional[str] = None       # e.g. "button"
+    action_value: dict = field(default_factory=dict)  # e.g. {"key": "enter_session", "task_id": "exp_xxx"}
+    action_chat_id: Optional[str] = None   # from event.context.open_chat_id
     # Raw event dict for forward compatibility
     raw: dict = field(default_factory=dict, repr=False)
 
@@ -182,6 +186,20 @@ def parse_webhook_event(raw: dict) -> WebhookEvent:
             text=text,
             message_type=message_type,
             image_keys=image_keys,
+            raw=raw,
+        )
+
+    # --- card.action.trigger (interactive card button clicks) ---
+    if event_type == "card.action.trigger":
+        operator: dict = event.get("operator", {})
+        action: dict = event.get("action", {})
+        context: dict = event.get("context", {})
+        return WebhookEvent(
+            event_type=event_type,
+            open_id=operator.get("open_id"),
+            action_tag=action.get("tag"),
+            action_value=action.get("value", {}),
+            action_chat_id=context.get("open_chat_id"),
             raw=raw,
         )
 
