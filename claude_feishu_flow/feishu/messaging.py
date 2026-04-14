@@ -208,13 +208,26 @@ class Messaging:
             Created message_id.
         """
         if not entries:
-            body = "_(暂无实验记录)_"
+            body_elements = [{"tag": "markdown", "content": "_(暂无实验记录)_"}]
         else:
-            lines = []
+            body_elements = []
             for d in entries:
                 status_icon = "✅" if (d / "results" / "summary.md").exists() else "⏳"
-                lines.append(f"{status_icon} `{d.name}`")
-            body = "\n".join(lines)
+                body_elements.append({
+                    "tag": "markdown",
+                    "content": f"{status_icon} `{d.name}`",
+                })
+                body_elements.append({
+                    "tag": "action",
+                    "actions": [
+                        {
+                            "tag": "button",
+                            "text": {"tag": "plain_text", "content": "进入会话"},
+                            "type": "primary",
+                            "value": {"key": "enter_session", "task_id": d.name},
+                        }
+                    ],
+                })
 
         card = {
             "config": {"wide_screen_mode": True},
@@ -226,14 +239,15 @@ class Messaging:
                 "template": "blue",
             },
             "elements": [
-                {
-                    "tag": "markdown",
-                    "content": body,
-                },
+                *body_elements,
                 {"tag": "hr"},
                 {
                     "tag": "markdown",
-                    "content": "✅ 已完成　⏳ 未完成/运行中\n用 `/edit exp_<uuid> <指令>` 修改某个实验",
+                    "content": (
+                        "✅ 已完成　⏳ 未完成/运行中\n"
+                        "点击 **进入会话** 按钮与实验 Sub Agent 对话\n"
+                        "在会话中发送 `/exit` 返回主界面"
+                    ),
                 },
             ],
         }
