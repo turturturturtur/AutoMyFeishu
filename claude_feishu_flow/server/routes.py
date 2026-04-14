@@ -375,7 +375,7 @@ async def _handle_enter_session(
     await svc.messaging.send_text(
         chat_id,
         f"已进入实验 **{task_id}** 的对话模式。\n"
-        "你可以直接提问（如"当前 loss 多少？"），Sub Agent 会读取实时日志回答。\n"
+        "你可以直接提问（如'当前 loss 多少？'），Sub Agent 会读取实时日志回答。\n"
         "发送 `/exit` 退出当前实验会话。",
     )
 
