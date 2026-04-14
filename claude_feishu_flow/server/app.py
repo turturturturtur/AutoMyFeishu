@@ -62,6 +62,8 @@ class Services:
     user_sessions: dict[str, str] = field(default_factory=dict)
     # Sub Agent conversation histories: maps task_id → list of message dicts
     sub_agent_histories: dict[str, list[dict]] = field(default_factory=dict)
+    # Per-task locks to prevent concurrent Sub Agent turns corrupting history
+    sub_agent_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
 
 
 def create_app(config: Config) -> FastAPI:

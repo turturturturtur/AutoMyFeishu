@@ -96,6 +96,10 @@ SUB_AGENT_TOOLS: list[dict] = [READ_LOG_TOOL, SAVE_SCRIPT_TOOL, RESTART_EXPERIME
 async def handle_save_script(inputs: dict, experiment_dir: Path) -> str:
     """Write the generated file to experiment_dir/setting/<filename>.
 
+    When filename is 'main.py', any existing run.sh is removed so the executor
+    falls back to `python3 setting/main.py`.  If the caller wants a custom
+    launcher they must also save a run.sh explicitly.
+
     Args:
         inputs:          The tool input dict from Claude (must contain 'filename' and 'code').
         experiment_dir:  The experiment root directory (Experiments/exp_<uuid>/).
@@ -111,6 +115,14 @@ async def handle_save_script(inputs: dict, experiment_dir: Path) -> str:
     setting_dir.mkdir(parents=True, exist_ok=True)
     script_path = setting_dir / filename
     script_path.write_text(code, encoding="utf-8")
+
+    # When main.py is overwritten (e.g. reverting to single-GPU), remove any
+    # stale run.sh so the executor doesn't keep using the old launcher.
+    if filename == "main.py":
+        run_sh = setting_dir / "run.sh"
+        if run_sh.exists():
+            run_sh.unlink()
+            logger.info("save_script: removed stale run.sh (main.py was overwritten)")
 
     abs_path = str(script_path.resolve())
     logger.info("save_script: wrote %d bytes to %s", len(code), abs_path)

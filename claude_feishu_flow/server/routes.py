@@ -415,19 +415,25 @@ async def _handle_sub_agent_message(
             svc.processing_ids.discard(event_message_id)
         return
 
-    # Get or create conversation history for this experiment
+    # Get or create conversation history and per-task lock for this experiment.
+    # The lock serialises concurrent turns so history is never mutated by two
+    # coroutines at the same time (Feishu can deliver rapid messages in parallel).
     if task_id not in svc.sub_agent_histories:
         svc.sub_agent_histories[task_id] = []
+    if task_id not in svc.sub_agent_locks:
+        svc.sub_agent_locks[task_id] = asyncio.Lock()
     history = svc.sub_agent_histories[task_id]
+    lock = svc.sub_agent_locks[task_id]
 
     loading_msg_id = await svc.messaging.send_text(chat_id, "⏳ 正在处理中，请稍候...")
     try:
-        result: SubAgentResult = await svc.claude.chat_with_sub_agent(
-            task_id=task_id,
-            user_text=user_text,
-            exp_dir=exp_dir,
-            history=history,
-        )
+        async with lock:
+            result: SubAgentResult = await svc.claude.chat_with_sub_agent(
+                task_id=task_id,
+                user_text=user_text,
+                exp_dir=exp_dir,
+                history=history,
+            )
         await svc.messaging.send_markdown(chat_id, result.text)
         if result.needs_restart:
             asyncio.create_task(
