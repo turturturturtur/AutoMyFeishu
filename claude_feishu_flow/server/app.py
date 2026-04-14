@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 import httpx
 from fastapi import FastAPI
@@ -22,6 +23,26 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class EditSession:
+    """State for an ongoing /edit interactive conversation.
+
+    The background coroutine blocks on queue.get() between user turns.
+    The webhook handler pushes incoming messages into the queue.
+    task_id and exp_dir are set at session creation time.
+    """
+    task_id: str
+    exp_dir_str: str                              # str so it's easily serialisable
+    queue: asyncio.Queue                          # str messages from user
+    max_retries: int = 0
+    done: bool = False                            # set True when session ends
+
+    @property
+    def exp_dir(self):  # type: ignore[return]
+        from pathlib import Path
+        return Path(self.exp_dir_str)
+
+
+@dataclass
 class Services:
     """All shared singleton objects, injected into route handlers via app.state."""
 
@@ -35,6 +56,8 @@ class Services:
     executor: ScriptExecutor
     # In-memory dedup set: prevents re-processing Feishu retry events
     processing_ids: set[str] = field(default_factory=set)
+    # Active /edit sessions keyed by chat_id
+    edit_sessions: dict[str, EditSession] = field(default_factory=dict)
 
 
 def create_app(config: Config) -> FastAPI:

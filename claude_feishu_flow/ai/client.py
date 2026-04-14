@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 import anthropic
 
-from claude_feishu_flow.ai.prompt import build_fix_system_prompt, build_system_prompt, build_summarize_system_prompt
+from claude_feishu_flow.ai.prompt import (
+    build_edit_chat_system_prompt,
+    build_fix_system_prompt,
+    build_system_prompt,
+    build_summarize_system_prompt,
+)
 from claude_feishu_flow.ai.tools import ALL_TOOLS, handle_save_script
 
 logger = logging.getLogger(__name__)
@@ -221,6 +227,133 @@ class ClaudeClient:
             if block.type == "text":
                 return block.text
         return "(Claude 未返回有效摘要)"
+
+    async def chat_edit(
+        self,
+        exp_dir: Path,
+        initial_instruction: str,
+        user_queue: asyncio.Queue,
+        reply_callback,  # async callable(text: str) -> None
+    ) -> bool:
+        """Interactive multi-turn conversation loop for editing an experiment.
+
+        Drives a free-form dialogue between the user and Claude until Claude
+        signals it is ready to run (by emitting [READY_TO_RUN] in its reply
+        after saving main.py via save_script).
+
+        Args:
+            exp_dir:             Path to the experiment root (exp_<uuid>/).
+            initial_instruction: The user's first /edit message text.
+            user_queue:          asyncio.Queue fed by the webhook handler with
+                                 subsequent user messages (str).
+            reply_callback:      Async function to send Claude's text reply back
+                                 to the Feishu chat.
+
+        Returns:
+            True if main.py was saved and Claude signalled READY_TO_RUN,
+            False if the session was cancelled (/cancel or queue sentinel None).
+        """
+        plan_path = exp_dir / "setting" / "plan.md"
+        main_path = exp_dir / "setting" / "main.py"
+
+        # Build the opening context message
+        context_parts: list[str] = [
+            f"用户的修改需求：{initial_instruction}",
+            "",
+            "以下是当前实验文件，供你参考：",
+        ]
+        if plan_path.exists():
+            context_parts.append(
+                f"\n## plan.md\n\n```markdown\n{plan_path.read_text(encoding='utf-8')}\n```"
+            )
+        if main_path.exists():
+            context_parts.append(
+                f"\n## main.py\n\n```python\n{main_path.read_text(encoding='utf-8')}\n```"
+            )
+
+        messages: list[dict] = [{"role": "user", "content": "\n".join(context_parts)}]
+        saved_main = False
+
+        while True:
+            # ── Call Claude ───────────────────────────────────────────────
+            response = await self._client.messages.create(
+                model=self._model,
+                max_tokens=4096,
+                system=build_edit_chat_system_prompt(),
+                tools=ALL_TOOLS,
+                messages=messages,
+            )
+            logger.info(
+                "chat_edit: stop_reason=%s, %d content blocks",
+                response.stop_reason, len(response.content),
+            )
+
+            messages.append({"role": "assistant", "content": response.content})
+
+            # ── Handle tool_use blocks ────────────────────────────────────
+            tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
+            tool_results = []
+            if tool_use_blocks:
+                for block in tool_use_blocks:
+                    tool_name: str = block.name
+                    tool_input: dict = block.input
+                    if tool_name == "save_script":
+                        result_text = await handle_save_script(tool_input, exp_dir)
+                        if tool_input.get("filename") == "main.py":
+                            saved_main = True
+                        logger.info("chat_edit save_script: %s", tool_input.get("filename"))
+                    else:
+                        result_text = f"Unknown tool: {tool_name}"
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_text,
+                    })
+                messages.append({"role": "user", "content": tool_results})
+
+            # ── Extract text reply ────────────────────────────────────────
+            reply_text = ""
+            for block in response.content:
+                if block.type == "text":
+                    reply_text += block.text
+
+            # Check for READY_TO_RUN signal
+            ready = "[READY_TO_RUN]" in reply_text
+            clean_reply = reply_text.replace("[READY_TO_RUN]", "").strip()
+
+            if clean_reply:
+                await reply_callback(clean_reply)
+
+            # If tool_use blocks present and not yet done, send results then
+            # continue the loop only if Claude didn't signal ready
+            if tool_use_blocks and not ready:
+                # Claude saved files but didn't signal ready — wait for more
+                # API turns to finish (max_tokens continuation or end_turn)
+                if response.stop_reason == "max_tokens":
+                    messages.append({
+                        "role": "user",
+                        "content": [{"type": "text", "text": "请继续"}],
+                    })
+                    continue
+                # end_turn after tool processing without READY_TO_RUN:
+                # Claude is awaiting user feedback; fall through to queue.get()
+
+            if ready and saved_main:
+                return True
+
+            # ── Wait for next user message ────────────────────────────────
+            try:
+                next_msg: Optional[str] = await asyncio.wait_for(
+                    user_queue.get(), timeout=300.0  # 5-minute idle timeout
+                )
+            except asyncio.TimeoutError:
+                await reply_callback("⏰ 对话超时（5分钟无响应），编辑会话已结束。如需继续请重新发送 /edit 命令。")
+                return False
+
+            if next_msg is None:  # sentinel: user sent /cancel or session closed
+                return False
+
+            messages.append({"role": "user", "content": next_msg})
 
     async def fix_experiment(self, exp_dir: Path, error_log: str) -> str:
         """Ask Claude to debug and fix the failing main.py via save_script.

@@ -97,6 +97,9 @@ async def feishu_webhook(
     if not event.text or not event.text.strip():
         return JSONResponse({"code": 0, "msg": "empty message ignored"})
 
+    chat_id: str = event.chat_id or ""
+    user_text: str = event.text.strip()
+
     # ── Deduplication: Feishu retries on timeout, avoid double-processing ─
     if event.message_id and event.message_id in svc.processing_ids:
         logger.info("Duplicate message_id=%s, skipping", event.message_id)
@@ -104,6 +107,16 @@ async def feishu_webhook(
 
     if event.message_id:
         svc.processing_ids.add(event.message_id)
+
+    # ── If an edit session is active for this chat, route message into it ─
+    if chat_id and chat_id in svc.edit_sessions:
+        session = svc.edit_sessions[chat_id]
+        if not session.done:
+            await session.queue.put(user_text)
+            return JSONResponse({"code": 0, "msg": "routed_to_session"})
+        else:
+            # Session ended; clean up and fall through to normal handling
+            del svc.edit_sessions[chat_id]
 
     # ── Register background task and IMMEDIATELY return 200 ───────────────
     background_tasks.add_task(_handle_message, event=event, svc=svc)
@@ -119,29 +132,29 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
 
     Argument parsing:
       --retry N  — retry up to N times on execution failure (self-healing).
-      /edit exp_<uuid> <instruction>  — modify existing experiment instead of creating new.
+      /list      — list all experiments.
+      /edit exp_<uuid> <instruction>  — start interactive edit session.
+      /cancel    — cancel active edit session.
 
-    Phase A (Generation) — Claude generates (or edits) plan.md and main.py.
+    Phase A (Generation) — Claude generates plan.md and main.py.
     Phase B (Execution)  — Python runs setting/main.py, with optional self-healing loop.
     Phase C (Reporting)  — Results written to Bitable, user notified via card.
     """
     chat_id: str = event.chat_id or ""
     user_text: str = event.text or ""
 
-    # ── Argument parsing ──────────────────────────────────────────────────
-    # Extract --retry N (and strip it from user_text)
-    retry_match = re.search(r'\s*--retry\s+(\d+)', user_text)
-    max_retries: int = int(retry_match.group(1)) if retry_match else 0
-    if retry_match:
-        user_text = (user_text[:retry_match.start()] + user_text[retry_match.end():]).strip()
-
     # Detect /edit prefix — must validate strictly before falling through
-    is_edit_mode = False
     task_id: str
     exp_dir: Path
 
     if user_text.strip() == "/list":
         await _handle_list(chat_id, svc)
+        return
+
+    if user_text.strip() == "/cancel":
+        if chat_id in svc.edit_sessions:
+            svc.edit_sessions[chat_id].queue.put_nowait(None)  # sentinel to stop loop
+        await svc.messaging.send_text(chat_id, "✅ 编辑会话已取消。")
         return
 
     if user_text.startswith("/edit"):
@@ -158,7 +171,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
             )
             return
         task_id = edit_match.group(1)
-        user_text = edit_match.group(2).strip()
+        instruction = edit_match.group(2).strip()
         exp_dir = svc.config.resolved_experiments_dir() / task_id
         if not (exp_dir / "setting" / "main.py").exists():
             await svc.messaging.send_help_card(
@@ -167,19 +180,48 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                 error_msg=f"实验 `{task_id}` 不存在或尚未生成脚本，无法编辑。",
             )
             return
-        is_edit_mode = True
-        # Recreate output/ and results/ in case they're missing, but leave setting/ intact
-        for sub in ("output", "results"):
-            (exp_dir / sub).mkdir(parents=True, exist_ok=True)
-    else:
-        task_id = f"exp_{uuid.uuid4()}"
-        exp_dir = svc.config.resolved_experiments_dir() / task_id
-        for sub in ("setting", "output", "results"):
-            (exp_dir / sub).mkdir(parents=True, exist_ok=True)
+
+        # Extract --retry N from the instruction
+        retry_match = re.search(r'\s*--retry\s+(\d+)', instruction)
+        max_retries: int = int(retry_match.group(1)) if retry_match else 0
+        if retry_match:
+            instruction = (instruction[:retry_match.start()] + instruction[retry_match.end():]).strip()
+
+        from claude_feishu_flow.server.app import EditSession
+        session = EditSession(
+            task_id=task_id,
+            exp_dir_str=str(exp_dir),
+            queue=asyncio.Queue(),
+            max_retries=max_retries,
+        )
+        svc.edit_sessions[chat_id] = session
+
+        asyncio.create_task(
+            _handle_edit_session(
+                chat_id=chat_id,
+                session=session,
+                initial_instruction=instruction,
+                svc=svc,
+                event_message_id=event.message_id,
+            )
+        )
+        return
+
+    # ── New experiment (normal mode) ──────────────────────────────────────
+    # Extract --retry N
+    retry_match = re.search(r'\s*--retry\s+(\d+)', user_text)
+    max_retries: int = int(retry_match.group(1)) if retry_match else 0
+    if retry_match:
+        user_text = (user_text[:retry_match.start()] + user_text[retry_match.end():]).strip()
+
+    task_id = f"exp_{uuid.uuid4()}"
+    exp_dir = svc.config.resolved_experiments_dir() / task_id
+    for sub in ("setting", "output", "results"):
+        (exp_dir / sub).mkdir(parents=True, exist_ok=True)
 
     logger.info(
-        "Background task started task_id=%s chat_id=%s is_edit=%s max_retries=%d exp_dir=%s",
-        task_id, chat_id, is_edit_mode, max_retries, exp_dir,
+        "Background task started task_id=%s chat_id=%s max_retries=%d exp_dir=%s",
+        task_id, chat_id, max_retries, exp_dir,
     )
 
     async def notify(text: str) -> None:
@@ -189,92 +231,23 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
             logger.warning("Failed to send notification: %s", exc)
 
     try:
-        # ── Phase A: Generation (or Edit) ─────────────────────────────────
+        # ── Phase A: Generation ───────────────────────────────────────────
         await notify("正在理解需求，生成实验计划和脚本，请稍候...")
 
         script_path = await svc.claude.generate_experiment(
             user_text=user_text,
             workspace_dir=exp_dir,
-            is_edit_mode=is_edit_mode,
         )
         logger.info("Phase A complete: script_path=%s", script_path)
 
-        # ── Phase B: Execution with self-healing retry loop ───────────────
-        await notify(
-            f"实验脚本已生成，正在后台执行...\n"
-            f"实验 ID：{task_id}\n"
-            f"计划文件：{exp_dir / 'setting' / 'plan.md'}"
-        )
-
-        repair_count = 0
-        for attempt in range(max_retries + 1):
-            result = await svc.executor.run(exp_dir)
-            if result.returncode == 0:
-                break
-            if attempt < max_retries:
-                repair_count += 1
-                await notify(
-                    f"⚠️ 实验报错，正在进行第 {repair_count}/{max_retries} 次自动修复..."
-                )
-                await svc.claude.fix_experiment(exp_dir, result.stderr)
-
-        status = "success" if result.returncode == 0 else "failed"
-        logger.info(
-            "Phase B complete: status=%s returncode=%d duration=%.2fs repair_count=%d",
-            status, result.returncode, result.duration_seconds, repair_count,
-        )
-
-        # ── Phase C: AI Analysis + Card ───────────────────────────────────
-        await notify("正在用 AI 分析实验结果，请稍候...")
-
-        plan_path = exp_dir / "setting" / "plan.md"
-        plan_text = _tail_file(plan_path, 99999)  # full plan for Claude
-
-        run_log = _tail_file(exp_dir / "output" / "run.log", _LOG_TAIL_RUN)
-        err_log = _tail_file(exp_dir / "output" / "error.log", _LOG_TAIL_ERR)
-        log_text = ""
-        if run_log:
-            log_text += f"### stdout (run.log)\n{run_log}\n\n"
-        if err_log:
-            log_text += f"### stderr (error.log)\n{err_log}\n"
-        if not log_text:
-            log_text = "(无日志输出)"
-
-        summary_md = await svc.claude.summarize_experiment(plan_text, log_text)
-        logger.info("Phase C: AI summary generated (%d chars)", len(summary_md))
-
-        # Write summary to results/summary.md
-        summary_path = exp_dir / "results" / "summary.md"
-        summary_path.write_text(summary_md, encoding="utf-8")
-        logger.info("Phase C: summary written to %s", summary_path)
-
-        # Write to Bitable
-        record_id = await svc.bitable.append_record({
-            "Command":       user_text[:2000],
-            "TaskID":        task_id,
-            "ScriptPath":    script_path,
-            "Status":        status,
-            "Duration_s":    round(result.duration_seconds, 2),
-            "Stdout":        result.stdout[:2000],
-            "Stderr":        result.stderr[:500],
-            "PlanPath":      str(plan_path),
-            "LogPath":       result.run_log_path,
-            "ResultSummary": summary_md[:5000],
-        })
-        logger.info("Bitable record written: %s", record_id)
-
-        # Send experiment card
-        plan_summary = plan_text[:_PLAN_CARD_MAX] if plan_text else "(计划文件不存在)"
-        await svc.messaging.send_experiment_card(
-            receive_id=chat_id,
-            receive_id_type="chat_id",
+        await _run_phase_b_and_c(
+            chat_id=chat_id,
             task_id=task_id,
-            command=user_text[:200],
-            plan_summary=plan_summary,
-            result_summary=summary_md,
-            status=status,
-            duration=result.duration_seconds,
-            repair_count=repair_count,
+            exp_dir=exp_dir,
+            command_text=user_text,
+            max_retries=max_retries,
+            svc=svc,
+            notify=notify,
         )
 
     except asyncio.TimeoutError:
@@ -284,7 +257,6 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
         logger.exception("Background task %s failed: %s", task_id, exc)
         await notify(f"❌ 发生错误：{exc}")
     finally:
-        # Clean up dedup set to avoid unbounded growth in long-running servers
         if event.message_id:
             svc.processing_ids.discard(event.message_id)
 
@@ -303,3 +275,162 @@ async def _handle_list(chat_id: str, svc) -> None:  # type: ignore[no-untyped-de
         receive_id_type="chat_id",
         entries=entries,
     )
+
+
+# ---------------------------------------------------------------------------
+# Shared Phase B + C helper (used by both normal and edit pipelines)
+# ---------------------------------------------------------------------------
+
+async def _run_phase_b_and_c(
+    chat_id: str,
+    task_id: str,
+    exp_dir: Path,
+    command_text: str,
+    max_retries: int,
+    svc,  # type: ignore[no-untyped-def]
+    notify,  # async callable(str)
+) -> None:
+    """Execute setting/main.py with optional self-healing, then run AI analysis
+    and send the final experiment card.  Raises on unrecoverable errors."""
+
+    await notify(
+        f"实验脚本已生成，正在后台执行...\n"
+        f"实验 ID：{task_id}\n"
+        f"计划文件：{exp_dir / 'setting' / 'plan.md'}"
+    )
+
+    repair_count = 0
+    for attempt in range(max_retries + 1):
+        result = await svc.executor.run(exp_dir)
+        if result.returncode == 0:
+            break
+        if attempt < max_retries:
+            repair_count += 1
+            await notify(
+                f"⚠️ 实验报错，正在进行第 {repair_count}/{max_retries} 次自动修复..."
+            )
+            await svc.claude.fix_experiment(exp_dir, result.stderr)
+
+    status = "success" if result.returncode == 0 else "failed"
+    logger.info(
+        "Phase B complete: task=%s status=%s returncode=%d duration=%.2fs repair_count=%d",
+        task_id, status, result.returncode, result.duration_seconds, repair_count,
+    )
+
+    # ── Phase C: AI Analysis + Card ───────────────────────────────────────
+    await notify("正在用 AI 分析实验结果，请稍候...")
+
+    plan_path = exp_dir / "setting" / "plan.md"
+    plan_text = _tail_file(plan_path, 99999)
+
+    run_log = _tail_file(exp_dir / "output" / "run.log", _LOG_TAIL_RUN)
+    err_log = _tail_file(exp_dir / "output" / "error.log", _LOG_TAIL_ERR)
+    log_text = ""
+    if run_log:
+        log_text += f"### stdout (run.log)\n{run_log}\n\n"
+    if err_log:
+        log_text += f"### stderr (error.log)\n{err_log}\n"
+    if not log_text:
+        log_text = "(无日志输出)"
+
+    summary_md = await svc.claude.summarize_experiment(plan_text, log_text)
+    logger.info("Phase C: AI summary generated (%d chars)", len(summary_md))
+
+    summary_path = exp_dir / "results" / "summary.md"
+    summary_path.write_text(summary_md, encoding="utf-8")
+
+    script_path = str(exp_dir / "setting" / "main.py")
+    await svc.bitable.append_record({
+        "Command":       command_text[:2000],
+        "TaskID":        task_id,
+        "ScriptPath":    script_path,
+        "Status":        status,
+        "Duration_s":    round(result.duration_seconds, 2),
+        "Stdout":        result.stdout[:2000],
+        "Stderr":        result.stderr[:500],
+        "PlanPath":      str(plan_path),
+        "LogPath":       result.run_log_path,
+        "ResultSummary": summary_md[:5000],
+    })
+
+    plan_summary = plan_text[:_PLAN_CARD_MAX] if plan_text else "(计划文件不存在)"
+    await svc.messaging.send_experiment_card(
+        receive_id=chat_id,
+        receive_id_type="chat_id",
+        task_id=task_id,
+        command=command_text[:200],
+        plan_summary=plan_summary,
+        result_summary=summary_md,
+        status=status,
+        duration=result.duration_seconds,
+        repair_count=repair_count,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Interactive edit session pipeline
+# ---------------------------------------------------------------------------
+
+async def _handle_edit_session(
+    chat_id: str,
+    session,  # EditSession
+    initial_instruction: str,
+    svc,  # type: ignore[no-untyped-def]
+    event_message_id: str,
+) -> None:
+    """Drive a multi-turn /edit conversation then execute and report results."""
+
+    async def notify(text: str) -> None:
+        try:
+            await svc.messaging.send_text(chat_id, text)
+        except Exception as exc:
+            logger.warning("Failed to send notification: %s", exc)
+
+    async def reply(text: str) -> None:
+        await notify(text)
+
+    exp_dir = session.exp_dir
+    task_id = session.task_id
+
+    try:
+        await notify(
+            f"🗣️ 已进入编辑对话模式，实验 ID：{task_id}\n"
+            "你可以直接和我对话，告诉我想要的修改。发送 /cancel 可随时退出。"
+        )
+
+        ready = await svc.claude.chat_edit(
+            exp_dir=exp_dir,
+            initial_instruction=initial_instruction,
+            user_queue=session.queue,
+            reply_callback=reply,
+        )
+
+        if not ready:
+            await notify("📝 编辑会话已结束，未执行脚本。")
+            return
+
+        # Ensure output/ and results/ dirs exist after potential fresh edit
+        for sub in ("output", "results"):
+            (exp_dir / sub).mkdir(parents=True, exist_ok=True)
+
+        await _run_phase_b_and_c(
+            chat_id=chat_id,
+            task_id=task_id,
+            exp_dir=exp_dir,
+            command_text=initial_instruction,
+            max_retries=session.max_retries,
+            svc=svc,
+            notify=notify,
+        )
+
+    except asyncio.TimeoutError:
+        logger.error("Edit session %s timed out", task_id)
+        await notify("⏰ 实验脚本执行超时，任务已终止。")
+    except Exception as exc:
+        logger.exception("Edit session %s failed: %s", task_id, exc)
+        await notify(f"❌ 发生错误：{exc}")
+    finally:
+        session.done = True
+        svc.edit_sessions.pop(chat_id, None)
+        if event_message_id:
+            svc.processing_ids.discard(event_message_id)
