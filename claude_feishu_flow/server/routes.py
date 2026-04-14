@@ -91,6 +91,30 @@ async def feishu_webhook(
         logger.info("Responding to url_verification challenge")
         return JSONResponse({"challenge": event.challenge})
 
+    # ── Card action events (interactive card button clicks) ──────────────
+    if event.event_type == "card.action.trigger":
+        action_value: dict = event.action_value
+        action_key: str = action_value.get("key", "")
+
+        if action_key == "enter_session":
+            task_id_val: str = action_value.get("task_id", "")
+            open_id_val: str = event.open_id or ""
+            chat_id_val: str = event.action_chat_id or ""
+            background_tasks.add_task(
+                _handle_enter_session,
+                open_id=open_id_val,
+                chat_id=chat_id_val,
+                task_id=task_id_val,
+                svc=svc,
+            )
+
+        return JSONResponse({
+            "toast": {
+                "type": "info",
+                "content": "请求已接收，正在进入会话...",
+            }
+        })
+
     # ── Only handle message events ────────────────────────────────────────
     if event.event_type != "im.message.receive_v1":
         return JSONResponse({"code": 0, "msg": "ignored"})
@@ -100,7 +124,8 @@ async def feishu_webhook(
         return JSONResponse({"code": 0, "msg": "empty message ignored"})
 
     chat_id: str = event.chat_id or ""
-    user_text: str = event.text.strip()
+    user_text: str = event.text.strip() if event.text else ""
+    open_id: str = event.open_id or ""
 
     # ── Deduplication: Feishu retries on timeout, avoid double-processing ─
     if event.message_id and event.message_id in svc.processing_ids:
@@ -109,6 +134,34 @@ async def feishu_webhook(
 
     if event.message_id:
         svc.processing_ids.add(event.message_id)
+
+    # ── /exit command: reset Sub Agent session regardless of current state ─
+    if user_text == "/exit":
+        old_session = svc.user_sessions.pop(open_id, None)
+        if old_session:
+            await svc.messaging.send_text(
+                chat_id,
+                f"已退出实验 `{old_session}` 的会话，回到主界面。",
+            )
+        else:
+            await svc.messaging.send_text(chat_id, "当前没有活跃的实验会话。")
+        if event.message_id:
+            svc.processing_ids.discard(event.message_id)
+        return JSONResponse({"code": 0, "msg": "exit_handled"})
+
+    # ── Sub Agent routing: if user has active session, forward there ──────
+    current_session = svc.user_sessions.get(open_id, "main")
+    if current_session != "main":
+        background_tasks.add_task(
+            _handle_sub_agent_message,
+            open_id=open_id,
+            chat_id=chat_id,
+            task_id=current_session,
+            user_text=user_text,
+            svc=svc,
+            event_message_id=event.message_id,
+        )
+        return JSONResponse({"code": 0, "msg": "routed_to_sub_agent"})
 
     # ── If an edit session is active for this chat, route message into it ─
     if chat_id and chat_id in svc.edit_sessions:
@@ -296,6 +349,82 @@ async def _handle_list(chat_id: str, svc) -> None:  # type: ignore[no-untyped-de
         receive_id_type="chat_id",
         entries=entries,
     )
+
+
+# ---------------------------------------------------------------------------
+# Card action: enter Sub Agent session
+# ---------------------------------------------------------------------------
+
+async def _handle_enter_session(
+    open_id: str,
+    chat_id: str,
+    task_id: str,
+    svc,  # type: ignore[no-untyped-def]
+) -> None:
+    """Handle card button click to enter a Sub Agent session."""
+    exp_dir = svc.config.resolved_experiments_dir() / task_id
+
+    if not exp_dir.exists():
+        await svc.messaging.send_text(
+            chat_id,
+            f"实验 `{task_id}` 不存在，无法进入会话。",
+        )
+        return
+
+    svc.user_sessions[open_id] = task_id
+    await svc.messaging.send_text(
+        chat_id,
+        f"已进入实验 **{task_id}** 的对话模式。\n"
+        "你可以直接提问（如"当前 loss 多少？"），Sub Agent 会读取实时日志回答。\n"
+        "发送 `/exit` 退出当前实验会话。",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Sub Agent message handler
+# ---------------------------------------------------------------------------
+
+async def _handle_sub_agent_message(
+    open_id: str,
+    chat_id: str,
+    task_id: str,
+    user_text: str,
+    svc,  # type: ignore[no-untyped-def]
+    event_message_id: str | None = None,
+) -> None:
+    """Forward a user message to the Sub Agent for a specific experiment."""
+    exp_dir = svc.config.resolved_experiments_dir() / task_id
+
+    if not exp_dir.exists():
+        svc.user_sessions.pop(open_id, None)
+        svc.sub_agent_histories.pop(task_id, None)
+        await svc.messaging.send_text(
+            chat_id,
+            f"实验 `{task_id}` 已不存在，自动退出会话。",
+        )
+        if event_message_id:
+            svc.processing_ids.discard(event_message_id)
+        return
+
+    # Get or create conversation history for this experiment
+    if task_id not in svc.sub_agent_histories:
+        svc.sub_agent_histories[task_id] = []
+    history = svc.sub_agent_histories[task_id]
+
+    try:
+        reply = await svc.claude.chat_with_sub_agent(
+            task_id=task_id,
+            user_text=user_text,
+            exp_dir=exp_dir,
+            history=history,
+        )
+        await svc.messaging.send_markdown(chat_id, reply)
+    except Exception as exc:
+        logger.exception("Sub agent error for task=%s: %s", task_id, exc)
+        await svc.messaging.send_text(chat_id, f"Sub Agent 出错：{exc}")
+    finally:
+        if event_message_id:
+            svc.processing_ids.discard(event_message_id)
 
 
 # ---------------------------------------------------------------------------
