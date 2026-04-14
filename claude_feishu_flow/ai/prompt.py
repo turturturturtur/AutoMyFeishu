@@ -3,6 +3,14 @@
 from __future__ import annotations
 
 
+def build_fix_system_prompt() -> str:
+    return """\
+你是一个高级 Debugger。之前的 Python 脚本运行失败报错。
+请分析 error_log，修改代码解决这个 bug，并使用 save_script 工具将修复后的代码重新覆盖保存到 main.py 中。
+不要长篇大论，直接改代码。
+"""
+
+
 def build_summarize_system_prompt() -> str:
     return """\
 你是一个实验分析专家。请根据提供的实验计划(Plan)和实际运行日志(Log)，总结实验结果。

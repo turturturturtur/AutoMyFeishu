@@ -73,6 +73,7 @@ class Messaging:
         result_summary: str,
         status: str,
         duration: float,
+        repair_count: int = 0,
     ) -> str:
         """Send a structured experiment report card.
 
@@ -85,6 +86,7 @@ class Messaging:
             result_summary:  Claude-generated Markdown analysis.
             status:          "success" | "failed".
             duration:        Wall-clock execution time in seconds.
+            repair_count:    Number of self-healing repair attempts made.
 
         Returns:
             Created message_id.
@@ -92,11 +94,14 @@ class Messaging:
         header_template = "blue" if status == "success" else "red"
         status_emoji = "✅" if status == "success" else "❌"
 
+        repair_info = f"\n\n**🔧 自动修复次数:** {repair_count}" if repair_count > 0 else ""
+
         element_info = {
             "tag": "markdown",
             "content": (
                 f"**🎯 用户指令**\n{command}\n\n"
-                f"**⏱️ 耗时:** {duration:.1f}s　|　**状态:** {status_emoji} {status}\n\n"
+                f"**⏱️ 耗时:** {duration:.1f}s　|　**状态:** {status_emoji} {status}"
+                f"{repair_info}\n\n"
                 f"**📝 实验计划**\n{plan_summary}"
             ),
         }

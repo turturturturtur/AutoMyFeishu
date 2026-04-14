@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from pathlib import Path
 
@@ -114,22 +115,47 @@ async def feishu_webhook(
 # ---------------------------------------------------------------------------
 
 async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
-    """Full two-phase pipeline:
+    """Full pipeline:
 
-    Phase A (Generation) — Claude generates plan.md and main.py in setting/.
-    Phase B (Execution)  — Python runs setting/main.py, writes logs to output/.
-    Phase C (Reporting)  — Results written to Bitable, user notified.
+    Argument parsing:
+      --retry N  — retry up to N times on execution failure (self-healing).
+      /edit exp_<uuid> <instruction>  — modify existing experiment instead of creating new.
+
+    Phase A (Generation) — Claude generates (or edits) plan.md and main.py.
+    Phase B (Execution)  — Python runs setting/main.py, with optional self-healing loop.
+    Phase C (Reporting)  — Results written to Bitable, user notified via card.
     """
     chat_id: str = event.chat_id or ""
     user_text: str = event.text or ""
-    task_id = f"exp_{uuid.uuid4()}"
-    exp_dir = svc.config.resolved_experiments_dir() / task_id
 
-    # Create the three-level directory structure upfront
-    for sub in ("setting", "output", "results"):
-        (exp_dir / sub).mkdir(parents=True, exist_ok=True)
+    # ── Argument parsing ──────────────────────────────────────────────────
+    # Extract --retry N (and strip it from user_text)
+    retry_match = re.search(r'\s*--retry\s+(\d+)', user_text)
+    max_retries: int = int(retry_match.group(1)) if retry_match else 0
+    if retry_match:
+        user_text = (user_text[:retry_match.start()] + user_text[retry_match.end():]).strip()
 
-    logger.info("Background task started task_id=%s chat_id=%s exp_dir=%s", task_id, chat_id, exp_dir)
+    # Detect /edit exp_<uuid> <instruction>
+    edit_match = re.match(r'^/edit\s+(exp_[0-9a-f-]+)\s+(.*)', user_text, re.DOTALL)
+    if edit_match:
+        task_id = edit_match.group(1)
+        user_text = edit_match.group(2).strip()
+        exp_dir = svc.config.resolved_experiments_dir() / task_id
+        is_edit_mode = True
+        # Recreate output/ and results/ in case they're missing, but leave setting/ intact
+        for sub in ("output", "results"):
+            (exp_dir / sub).mkdir(parents=True, exist_ok=True)
+    else:
+        task_id = f"exp_{uuid.uuid4()}"
+        exp_dir = svc.config.resolved_experiments_dir() / task_id
+        for sub in ("setting", "output", "results"):
+            (exp_dir / sub).mkdir(parents=True, exist_ok=True)
+        is_edit_mode = False
+
+    logger.info(
+        "Background task started task_id=%s chat_id=%s is_edit=%s max_retries=%d exp_dir=%s",
+        task_id, chat_id, is_edit_mode, max_retries, exp_dir,
+    )
 
     async def notify(text: str) -> None:
         try:
@@ -138,28 +164,39 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
             logger.warning("Failed to send notification: %s", exc)
 
     try:
-        # ── Phase A: Generation ───────────────────────────────────────────
+        # ── Phase A: Generation (or Edit) ─────────────────────────────────
         await notify("正在理解需求，生成实验计划和脚本，请稍候...")
 
         script_path = await svc.claude.generate_experiment(
             user_text=user_text,
             workspace_dir=exp_dir,
+            is_edit_mode=is_edit_mode,
         )
         logger.info("Phase A complete: script_path=%s", script_path)
 
-        # ── Phase B: Execution ────────────────────────────────────────────
+        # ── Phase B: Execution with self-healing retry loop ───────────────
         await notify(
             f"实验脚本已生成，正在后台执行...\n"
             f"实验 ID：{task_id}\n"
             f"计划文件：{exp_dir / 'setting' / 'plan.md'}"
         )
 
-        result = await svc.executor.run(exp_dir)
+        repair_count = 0
+        for attempt in range(max_retries + 1):
+            result = await svc.executor.run(exp_dir)
+            if result.returncode == 0:
+                break
+            if attempt < max_retries:
+                repair_count += 1
+                await notify(
+                    f"⚠️ 实验报错，正在进行第 {repair_count}/{max_retries} 次自动修复..."
+                )
+                await svc.claude.fix_experiment(exp_dir, result.stderr)
 
-        status = "success" if result.success else "failed"
+        status = "success" if result.returncode == 0 else "failed"
         logger.info(
-            "Phase B complete: status=%s returncode=%d duration=%.2fs",
-            status, result.returncode, result.duration_seconds,
+            "Phase B complete: status=%s returncode=%d duration=%.2fs repair_count=%d",
+            status, result.returncode, result.duration_seconds, repair_count,
         )
 
         # ── Phase C: AI Analysis + Card ───────────────────────────────────
@@ -212,6 +249,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
             result_summary=summary_md,
             status=status,
             duration=result.duration_seconds,
+            repair_count=repair_count,
         )
 
     except asyncio.TimeoutError:

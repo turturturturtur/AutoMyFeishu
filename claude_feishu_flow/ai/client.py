@@ -8,7 +8,7 @@ from typing import Optional
 
 import anthropic
 
-from claude_feishu_flow.ai.prompt import build_system_prompt, build_summarize_system_prompt
+from claude_feishu_flow.ai.prompt import build_fix_system_prompt, build_system_prompt, build_summarize_system_prompt
 from claude_feishu_flow.ai.tools import ALL_TOOLS, handle_save_script
 
 logger = logging.getLogger(__name__)
@@ -60,11 +60,15 @@ class ClaudeClient:
         self,
         user_text: str,
         workspace_dir: Path,
+        is_edit_mode: bool = False,
     ) -> str:
         """Ask Claude to generate plan.md and main.py, saving both via save_script.
 
         Runs the agentic tool-use loop until Claude saves main.py or
         exhausts max_rounds. Claude is expected to save plan.md first, then main.py.
+
+        In edit mode, the existing plan.md and main.py are included in the prompt so
+        Claude can modify them in-place rather than generating from scratch.
 
         Handles three stop_reason cases per round:
           - "end_turn"   : Claude finished naturally; exit loop.
@@ -78,6 +82,8 @@ class ClaudeClient:
             user_text:     The user's instruction from Feishu.
             workspace_dir: Path to the experiment root directory (Experiments/exp_<uuid>/).
                            Files are saved to workspace_dir/setting/ by the handler.
+            is_edit_mode:  If True, read existing plan.md / main.py and attach them so
+                           Claude modifies rather than generates from scratch.
 
         Returns:
             Absolute path of the saved main.py script.
@@ -85,7 +91,27 @@ class ClaudeClient:
         Raises:
             RuntimeError: If Claude never saves main.py within max_rounds.
         """
-        messages: list[dict] = [{"role": "user", "content": user_text}]
+        if is_edit_mode:
+            plan_path = workspace_dir / "setting" / "plan.md"
+            main_path = workspace_dir / "setting" / "main.py"
+            context_parts: list[str] = [
+                f"用户的修改指令：{user_text}",
+                "",
+                "以下是现有的实验代码，请根据用户指令修改，并调用 save_script 覆盖保存。",
+            ]
+            if plan_path.exists():
+                context_parts.append(
+                    f"\n## 现有 plan.md\n\n```markdown\n{plan_path.read_text(encoding='utf-8')}\n```"
+                )
+            if main_path.exists():
+                context_parts.append(
+                    f"\n## 现有 main.py\n\n```python\n{main_path.read_text(encoding='utf-8')}\n```"
+                )
+            initial_content = "\n".join(context_parts)
+        else:
+            initial_content = user_text
+
+        messages: list[dict] = [{"role": "user", "content": initial_content}]
         saved_files: dict[str, str] = {}  # filename -> abs_path
 
         for round_num in range(1, _MAX_ROUNDS + 1):
@@ -195,3 +221,99 @@ class ClaudeClient:
             if block.type == "text":
                 return block.text
         return "(Claude 未返回有效摘要)"
+
+    async def fix_experiment(self, exp_dir: Path, error_log: str) -> str:
+        """Ask Claude to debug and fix the failing main.py via save_script.
+
+        Uses the same agentic tool-use loop as generate_experiment to preserve
+        the tool_use/max_tokens anti-truncation invariant.
+
+        Args:
+            exp_dir:   Path to the experiment root (exp_<uuid>/).
+            error_log: Captured stderr from the failed run.
+
+        Returns:
+            Absolute path of the fixed main.py.
+
+        Raises:
+            RuntimeError: If Claude does not save a fixed main.py within max_rounds.
+        """
+        main_path = exp_dir / "setting" / "main.py"
+        current_code = main_path.read_text(encoding="utf-8") if main_path.exists() else ""
+
+        initial_content = (
+            f"运行报错信息：\n```\n{error_log}\n```\n\n"
+            f"当前 main.py 代码：\n```python\n{current_code}\n```"
+        )
+        messages: list[dict] = [{"role": "user", "content": initial_content}]
+        saved_files: dict[str, str] = {}
+
+        for round_num in range(1, _MAX_ROUNDS + 1):
+            logger.info("Claude fix round %d — sending %d messages", round_num, len(messages))
+
+            response = await self._client.messages.create(
+                model=self._model,
+                max_tokens=8192,
+                system=build_fix_system_prompt(),
+                tools=ALL_TOOLS,
+                messages=messages,
+            )
+
+            logger.info(
+                "Claude fix round %d — stop_reason=%s, %d content blocks",
+                round_num,
+                response.stop_reason,
+                len(response.content),
+            )
+
+            messages.append({"role": "assistant", "content": response.content})
+
+            tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
+
+            if tool_use_blocks:
+                tool_results = []
+                for block in tool_use_blocks:
+                    tool_name: str = block.name
+                    tool_input: dict = block.input
+                    tool_use_id: str = block.id
+
+                    logger.info("Fix tool call: %s filename=%s", tool_name, tool_input.get("filename"))
+
+                    if tool_name == "save_script":
+                        result_text = await handle_save_script(tool_input, exp_dir)
+                        saved_files[tool_input["filename"]] = result_text
+                    else:
+                        result_text = f"Unknown tool: {tool_name}"
+                        logger.warning("Received unknown tool call: %s", tool_name)
+
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": result_text,
+                    })
+
+                messages.append({"role": "user", "content": tool_results})
+
+                if "main.py" in saved_files:
+                    logger.info("fix_experiment: main.py saved at round %d", round_num)
+                    break
+
+            elif response.stop_reason == "max_tokens":
+                logger.warning(
+                    "Fix round %d hit max_tokens with no tool_use blocks; sending continuation prompt",
+                    round_num,
+                )
+                messages.append({
+                    "role": "user",
+                    "content": [{"type": "text", "text": "请继续"}],
+                })
+
+            else:
+                break
+
+        if "main.py" not in saved_files:
+            raise RuntimeError(
+                f"Claude did not fix main.py within {_MAX_ROUNDS} rounds."
+            )
+
+        return saved_files["main.py"]
