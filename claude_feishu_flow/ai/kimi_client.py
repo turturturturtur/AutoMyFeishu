@@ -341,6 +341,7 @@ class KimiClient:
         user_text: str,
         exp_base_dir: Path,
         images: list[dict] | None = None,
+        history: list[dict] | None = None,
     ) -> MainAgentResult:
         """Orchestrator agent (Kimi): understands natural language and triggers experiment operations.
 
@@ -357,10 +358,21 @@ class KimiClient:
             user_text:     The user's raw message.
             exp_base_dir:  Path to the experiments root directory (for list_experiments).
             images:        Optional list of {"media_type": ..., "base64_data": ...} dicts.
+            history:       Mutable list of conversation messages (mutated in place for persistence).
+                           Stores only user/assistant text turns (no tool call internals).
 
         Returns:
             MainAgentResult with the model's text reply and an optional action.
         """
+        if history is None:
+            history = []
+
+        # Trim history to prevent unbounded growth (ensure starts with user role after trim)
+        if len(history) > 40:
+            history[:] = history[-20:]
+            while history and history[0]["role"] != "user":
+                history.pop(0)
+
         user_content: list = []
         if images:
             for img in images:
@@ -370,10 +382,13 @@ class KimiClient:
                 })
         user_content.append({"type": "text", "text": user_text})
 
+        # Append this turn's user message to persistent history
+        history.append({"role": "user", "content": user_content})
+
+        # Working copy for the tool-use loop: system + history snapshot
         messages: list[dict] = [
             {"role": "system", "content": build_main_agent_prompt()},
-            {"role": "user", "content": user_content},
-        ]
+        ] + list(history)
         response = None
 
         for round_num in range(1, self._MAIN_AGENT_MAX_ROUNDS + 1):
@@ -392,7 +407,9 @@ class KimiClient:
 
             if not msg.tool_calls:
                 content = msg.content
-                return MainAgentResult(text=content if content else "(未返回有效回复)")
+                text = content if content else "(未返回有效回复)"
+                history.append({"role": "assistant", "content": text})
+                return MainAgentResult(text=text)
 
             reply_text: str = msg.content or ""
 
@@ -477,15 +494,19 @@ class KimiClient:
                         "content": f"Unknown tool: {tool_name}",
                     })
 
-            # Blocking tool found — exit immediately
+            # Blocking tool found — save summary to history and exit
             if action_result is not None:
+                history.append({"role": "assistant", "content": action_result.text})
                 return action_result
             # Inline tools — continue loop
 
         # Fallback after max rounds
         if response is not None:
             content = response.choices[0].message.content
-            return MainAgentResult(text=content if content else "(未返回有效回复)")
+            text = content if content else "(未返回有效回复)"
+            history.append({"role": "assistant", "content": text})
+            return MainAgentResult(text=text)
+        history.append({"role": "assistant", "content": "(未返回有效回复)"})
         return MainAgentResult(text="(未返回有效回复)")
 
     async def chat_edit(

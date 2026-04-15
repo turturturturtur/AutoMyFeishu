@@ -490,6 +490,8 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
             user_text = user_text + file_text
 
         exp_base_dir = svc.config.resolved_experiments_dir()
+        # Retrieve or create persistent history for this chat
+        history = svc.main_agent_histories.setdefault(chat_id, [])
         loading_msg_id = await svc.messaging.send_text(
             chat_id, "⏳ 正在思考中，请稍候...", reply_message_id=event.message_id
         )
@@ -498,6 +500,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                 user_text=user_text or "(用户发送了图片或文件)",
                 exp_base_dir=exp_base_dir,
                 images=images if images else None,
+                history=history,
             )
             if result.text:
                 await svc.messaging.send_markdown(

@@ -67,6 +67,8 @@ class Services:
     sub_agent_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
     # Maps card message_id → task_id for parent_id-based routing (引用回复实验卡片)
     msg_to_task: dict[str, str] = field(default_factory=dict)
+    # Main Agent (Orchestrator) conversation histories: maps chat_id → list of message dicts
+    main_agent_histories: dict[str, list[dict]] = field(default_factory=dict)
 
 
 def create_app(config: Config) -> FastAPI:

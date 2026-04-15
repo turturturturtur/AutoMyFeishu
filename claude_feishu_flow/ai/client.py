@@ -342,6 +342,7 @@ class ClaudeClient:
         user_text: str,
         exp_base_dir: Path,
         images: list[dict] | None = None,
+        history: list[dict] | None = None,
     ) -> MainAgentResult:
         """Orchestrator agent: understands natural language and triggers experiment operations.
 
@@ -357,10 +358,20 @@ class ClaudeClient:
             user_text:     The user's raw message.
             exp_base_dir:  Path to the experiments root directory (for list_experiments).
             images:        Optional list of {"media_type": ..., "base64_data": ...} dicts.
+            history:       Mutable list of conversation messages (mutated in place for persistence).
 
         Returns:
             MainAgentResult with the model's text reply and an optional action.
         """
+        if history is None:
+            history = []
+
+        # Trim history to prevent unbounded growth (ensure starts with user role after trim)
+        if len(history) > 40:
+            history[:] = history[-20:]
+            while history and history[0]["role"] != "user":
+                history.pop(0)
+
         content: list = []
         if images:
             for img in images:
@@ -374,7 +385,11 @@ class ClaudeClient:
                 })
         content.append({"type": "text", "text": user_text})
 
-        messages: list[dict] = [{"role": "user", "content": content}]
+        # Append this turn's user message to persistent history
+        history.append({"role": "user", "content": content})
+
+        # Use a snapshot for the tool-use loop (history tracks only user/assistant turns)
+        messages: list[dict] = list(history)
         system_prompt = build_main_agent_prompt()
         response = None
 
@@ -394,7 +409,9 @@ class ClaudeClient:
             if not tool_use_blocks:
                 for block in response.content:
                     if block.type == "text":
+                        history.append({"role": "assistant", "content": block.text})
                         return MainAgentResult(text=block.text)
+                history.append({"role": "assistant", "content": "(未返回有效回复)"})
                 return MainAgentResult(text="(未返回有效回复)")
 
             # Extract any partial text reply that accompanies tool calls
@@ -476,8 +493,9 @@ class ClaudeClient:
                         "content": f"Unknown tool: {tool_name}",
                     })
 
-            # Blocking tool found — exit immediately
+            # Blocking tool found — save summary to history and exit
             if action_result is not None:
+                history.append({"role": "assistant", "content": action_result.text})
                 return action_result
 
             # Inline tools — feed results back and continue
@@ -487,7 +505,9 @@ class ClaudeClient:
         if response is not None:
             for block in response.content:
                 if block.type == "text":
+                    history.append({"role": "assistant", "content": block.text})
                     return MainAgentResult(text=block.text)
+        history.append({"role": "assistant", "content": "(未返回有效回复)"})
         return MainAgentResult(text="(未返回有效回复)")
 
     async def chat_edit(
