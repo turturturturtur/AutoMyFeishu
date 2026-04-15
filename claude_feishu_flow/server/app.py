@@ -6,12 +6,13 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, Optional
 
 import httpx
 from fastapi import FastAPI
 
 from claude_feishu_flow.ai.client import ClaudeClient
+from claude_feishu_flow.ai.kimi_client import KimiClient
 from claude_feishu_flow.config import Config
 from claude_feishu_flow.feishu.auth import TokenManager
 from claude_feishu_flow.feishu.bitable import BitableClient
@@ -52,7 +53,7 @@ class Services:
     feishu: FeishuClient
     messaging: Messaging
     bitable: BitableClient
-    claude: ClaudeClient
+    ai: Any  # ClaudeClient or KimiClient
     executor: ScriptExecutor
     # In-memory dedup set: prevents re-processing Feishu retry events
     processing_ids: set[str] = field(default_factory=set)
@@ -85,11 +86,16 @@ def create_app(config: Config) -> FastAPI:
         # Auto-create/find the Experiment_Results table
         await bitable.ensure_experiment_table()
 
-        claude = ClaudeClient(
-            api_key=config.anthropic_api_key,
-            model=config.anthropic_model,
-            base_url=config.anthropic_base_url or None,
-        )
+        if config.llm_provider == "kimi":
+            if not config.kimi_api_key:
+                raise ValueError("kimi_api_key must be set when llm_provider='kimi'")
+            ai_client: Any = KimiClient(api_key=config.kimi_api_key, model=config.kimi_model)
+        else:
+            ai_client = ClaudeClient(
+                api_key=config.anthropic_api_key,
+                model=config.anthropic_model,
+                base_url=config.anthropic_base_url or None,
+            )
         executor = ScriptExecutor()
 
         app.state.services = Services(
@@ -99,7 +105,7 @@ def create_app(config: Config) -> FastAPI:
             feishu=feishu_client,
             messaging=messaging,
             bitable=bitable,
-            claude=claude,
+            ai=ai_client,
             executor=executor,
         )
 

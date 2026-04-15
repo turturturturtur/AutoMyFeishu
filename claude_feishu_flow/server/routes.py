@@ -315,7 +315,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                 except Exception as exc:
                     logger.warning("Failed to download image %s: %s", img_key, exc)
 
-        script_path = await svc.claude.generate_experiment(
+        script_path = await svc.ai.generate_experiment(
             user_text=user_text or "(用户发送了图片，请参考图片内容生成实验脚本)",
             workspace_dir=exp_dir,
             images=images if images else None,
@@ -428,7 +428,7 @@ async def _handle_sub_agent_message(
     loading_msg_id = await svc.messaging.send_text(chat_id, "⏳ 正在处理中，请稍候...")
     try:
         async with lock:
-            result: SubAgentResult = await svc.claude.chat_with_sub_agent(
+            result: SubAgentResult = await svc.ai.chat_with_sub_agent(
                 task_id=task_id,
                 user_text=user_text,
                 exp_dir=exp_dir,
@@ -482,7 +482,7 @@ async def _restart_and_notify(
             log_text += f"### stderr\n{err_log}\n"
         if not log_text:
             log_text = "(无日志输出)"
-        summary_md = await svc.claude.summarize_experiment(plan_text, log_text)
+        summary_md = await svc.ai.summarize_experiment(plan_text, log_text)
         await svc.messaging.send_experiment_card(
             receive_id=chat_id,
             receive_id_type="chat_id",
@@ -537,7 +537,7 @@ async def _run_phase_b_and_c(
             await notify(
                 f"⚠️ 实验报错，正在进行第 {repair_count}/{max_retries} 次自动修复..."
             )
-            await svc.claude.fix_experiment(exp_dir, result.stderr)
+            await svc.ai.fix_experiment(exp_dir, result.stderr)
 
     status = "success" if result.returncode == 0 else "failed"
     logger.info(
@@ -561,7 +561,7 @@ async def _run_phase_b_and_c(
     if not log_text:
         log_text = "(无日志输出)"
 
-    summary_md = await svc.claude.summarize_experiment(plan_text, log_text)
+    summary_md = await svc.ai.summarize_experiment(plan_text, log_text)
     logger.info("Phase C: AI summary generated (%d chars)", len(summary_md))
 
     summary_path = exp_dir / "results" / "summary.md"
@@ -630,7 +630,7 @@ async def _handle_edit_session(
             "你可以直接和我对话，告诉我想要的修改。发送 /cancel 可随时退出。"
         )
 
-        ready = await svc.claude.chat_edit(
+        ready = await svc.ai.chat_edit(
             exp_dir=exp_dir,
             initial_instruction=initial_instruction,
             user_queue=session.queue,

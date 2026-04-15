@@ -19,14 +19,21 @@ class Config(BaseSettings):
     # Optionally set to skip the lookup on every startup (populated at runtime).
     bitable_table_id: str = ""
 
+    # LLM provider selection: "anthropic" (default) or "kimi"
+    llm_provider: str = "anthropic"
+
     # Claude / Anthropic
-    anthropic_api_key: str
+    anthropic_api_key: str = ""
     # Model name — use any Claude model or a compatible third-party model name.
     anthropic_model: str = "claude-3-5-sonnet-latest"
     # Optional: override the Anthropic API base URL for mirror / proxy endpoints.
     # e.g. "https://your-proxy.example.com/v1"
     # Leave unset (or empty) to use the official Anthropic API.
     anthropic_base_url: Optional[str] = None
+
+    # Kimi / Moonshot AI
+    kimi_api_key: Optional[str] = None
+    kimi_model: str = "moonshot-v1-32k"
 
     # Server
     host: str = "0.0.0.0"

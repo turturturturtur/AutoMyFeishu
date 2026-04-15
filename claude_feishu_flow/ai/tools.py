@@ -109,7 +109,37 @@ SUB_AGENT_TOOLS: list[dict] = [READ_LOG_TOOL, SAVE_SCRIPT_TOOL, RESTART_EXPERIME
 
 
 # ---------------------------------------------------------------------------
-# Tool handler
+# OpenAI / Kimi tool schema conversion
+# ---------------------------------------------------------------------------
+
+def convert_to_openai_tools(anthropic_tools: list[dict]) -> list[dict]:
+    """Convert Anthropic-format tool definitions to OpenAI function-calling format.
+
+    Anthropic tools use ``input_schema`` as the JSON Schema for parameters.
+    OpenAI wraps each tool in ``{"type": "function", "function": {...}}`` with
+    a ``parameters`` key instead.
+
+    Args:
+        anthropic_tools: List of tool dicts in Anthropic format (with ``input_schema``).
+
+    Returns:
+        List of tool dicts in OpenAI format.
+    """
+    result: list[dict] = []
+    for tool in anthropic_tools:
+        result.append({
+            "type": "function",
+            "function": {
+                "name": tool["name"],
+                "description": tool.get("description", ""),
+                "parameters": tool["input_schema"],
+            },
+        })
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Tool handlers
 # ---------------------------------------------------------------------------
 
 async def handle_save_script(inputs: dict, experiment_dir: Path) -> str:
