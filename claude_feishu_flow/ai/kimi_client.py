@@ -178,6 +178,12 @@ class KimiClient:
 
                 # Execute each tool call — wrap in try/except for fault tolerance
                 for tc in msg.tool_calls:
+                    logger.info(
+                        "Kimi attempt %d: Calling tool %s with args %s",
+                        round_num,
+                        tc.function.name,
+                        tc.function.arguments,
+                    )
                     try:
                         tool_input: dict = json.loads(tc.function.arguments)
                         result_text = await _dispatch_tool(tc.function.name, tool_input, workspace_dir)
@@ -202,8 +208,22 @@ class KimiClient:
                 messages.append({"role": "user", "content": "请继续"})
 
             else:
-                # finish_reason == "stop"
-                break
+                # finish_reason == "stop" with no tool_calls
+                if "main.py" not in saved_files:
+                    logger.warning(
+                        "Kimi round %d: stop with no tool_calls, main.py not yet saved — re-prompting",
+                        round_num,
+                    )
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "你必须调用 save_script 工具。"
+                            "请立即先调用 save_script 写入 plan.md，再调用 save_script 写入 main.py。"
+                            "不要只发文字，必须调用工具！"
+                        ),
+                    })
+                else:
+                    break
 
         if "main.py" not in saved_files:
             raise RuntimeError(
@@ -395,6 +415,12 @@ class KimiClient:
                     continue
 
                 for tc in msg.tool_calls:
+                    logger.info(
+                        "Kimi fix attempt %d: Calling tool %s with args %s",
+                        round_num,
+                        tc.function.name,
+                        tc.function.arguments,
+                    )
                     try:
                         tool_input = json.loads(tc.function.arguments)
                         result_text = await _dispatch_tool(tc.function.name, tool_input, exp_dir)

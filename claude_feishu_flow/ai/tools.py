@@ -127,12 +127,15 @@ def convert_to_openai_tools(anthropic_tools: list[dict]) -> list[dict]:
     """
     result: list[dict] = []
     for tool in anthropic_tools:
+        schema = dict(tool["input_schema"])  # shallow copy to avoid mutating originals
+        if "required" in schema and not schema["required"]:
+            schema.pop("required")  # remove empty required list — some gateways reject it
         result.append({
             "type": "function",
             "function": {
                 "name": tool["name"],
                 "description": tool.get("description", ""),
-                "parameters": tool["input_schema"],
+                "parameters": schema,
             },
         })
     return result

@@ -109,6 +109,11 @@ def build_system_prompt() -> str:
    - <font color='green'>成功/正常</font>
    - <font color='red'>错误/警告</font>
    - <font color='grey'>辅助说明/备注</font>
+
+【强制执行顺序】
+1. 你必须先调用 save_script 写入 plan.md。
+2. 紧接着，你必须再次调用 save_script 写入 main.py（以及如果需要的 run.sh）。
+3. 当 main.py 写入完成后，不要再做任何无意义的回复，请立即停止对话！
 """
 
 
