@@ -43,6 +43,9 @@ class Config(BaseSettings):
     # Experiments directory (each experiment gets its own subdirectory exp_<uuid>)
     experiments_dir: str = "./Experiments"
 
+    # Default max auto-repair retries when --retry N is not specified
+    default_max_retries: int = 5
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
     def resolved_experiments_dir(self) -> Path:

@@ -105,6 +105,8 @@ EXECUTE_BASH_TOOL: dict = {
     "description": (
         "在宿主机执行系统终端命令并返回输出。可用于排查进程(ps aux)、检查 GPU (nvidia-smi)、"
         "查看依赖(pip list)或检查文件是否存在(ls -la)。"
+        "【重要】执行 Python 或 pip 命令前，请先检查 GLOBAL_RULES.md 中是否有关于虚拟环境的规定，"
+        "并根据规定激活指定虚拟环境后再执行。"
     ),
     "input_schema": {
         "type": "object",

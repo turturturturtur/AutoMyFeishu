@@ -393,7 +393,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
 
         # Extract --retry N from the instruction
         retry_match = re.search(r'\s*--retry\s+(\d+)', instruction)
-        max_retries: int = int(retry_match.group(1)) if retry_match else 0
+        max_retries: int = int(retry_match.group(1)) if retry_match else svc.config.default_max_retries
         if retry_match:
             instruction = (instruction[:retry_match.start()] + instruction[retry_match.end():]).strip()
 
@@ -419,7 +419,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
 
     # ── Extract --retry N ─────────────────────────────────────────────────
     retry_match = re.search(r'\s*--retry\s+(\d+)', user_text)
-    max_retries: int = int(retry_match.group(1)) if retry_match else 0
+    max_retries: int = int(retry_match.group(1)) if retry_match else svc.config.default_max_retries
     if retry_match:
         user_text = (user_text[:retry_match.start()] + user_text[retry_match.end():]).strip()
 

@@ -2,6 +2,18 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
+
+def _get_global_rules() -> str:
+    """Read GLOBAL_RULES.md from the project root if it exists."""
+    rules_path = Path(os.getcwd()) / "GLOBAL_RULES.md"
+    if rules_path.exists():
+        content = rules_path.read_text(encoding="utf-8").strip()
+        return f"\n\n【全局环境与物理机约束】\n{content}\n"
+    return ""
+
 
 def build_edit_chat_system_prompt() -> str:
     return """\
@@ -55,7 +67,7 @@ def build_fix_system_prompt() -> str:
 1. **绝对禁止** Markdown 表格（含 | 的语法），改用列表或 ```text 代码块
 2. **绝对禁止** LaTeX 数学公式（$...$ 或 $$...$$），改用纯文本伪代码
 3. 禁止使用 ## 标题，改用 **标题名称** 加粗代替
-"""
+""" + _get_global_rules()
 
 
 def build_review_agent_prompt() -> str:
@@ -85,7 +97,7 @@ def build_review_agent_prompt() -> str:
 1. **绝对禁止** Markdown 表格（含 | 的语法），改用列表
 2. **绝对禁止** LaTeX 数学公式（$...$ 或 $$...$$），改用纯文本伪代码
 3. 禁止使用 ## 标题，改用 **标题名称** 加粗代替
-"""
+""" + _get_global_rules()
 
 
 def build_summarize_system_prompt() -> str:
@@ -150,7 +162,7 @@ def build_system_prompt() -> str:
 1. 你必须先调用 save_script 写入 plan.md。
 2. 紧接着，你必须再次调用 save_script 写入 main.py（以及如果需要的 run.sh）。
 3. 当 main.py 写入完成后，不要再做任何无意义的回复，请立即停止对话！
-"""
+""" + _get_global_rules()
 
 
 def build_casual_chat_prompt() -> str:
@@ -235,7 +247,7 @@ def build_main_agent_prompt() -> str:
    - <font color='green'>成功/正常</font>
    - <font color='red'>错误/警告</font>
    - <font color='grey'>辅助说明/备注</font>
-"""
+""" + _get_global_rules()
 
 
 def build_sub_agent_system_prompt(task_id: str, exp_dir_str: str) -> str:
@@ -283,4 +295,4 @@ def build_sub_agent_system_prompt(task_id: str, exp_dir_str: str) -> str:
    - <font color='green'>成功/正常</font>
    - <font color='red'>错误/警告</font>
    - <font color='grey'>辅助说明/备注</font>
-"""
+""" + _get_global_rules()
