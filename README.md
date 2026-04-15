@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo.png" width="300" alt="claude-feishu-flow logo" />
+  <img src="docs/assets/logo.png" alt="claude-feishu-flow logo" />
 </p>
 
 <h1 align="center">claude-feishu-flow</h1>
