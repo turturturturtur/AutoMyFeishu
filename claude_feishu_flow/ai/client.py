@@ -582,7 +582,7 @@ class ClaudeClient:
                             tool_results.append({
                                 "type": "tool_result",
                                 "tool_use_id": block.id,
-                                "content": "重启请求已收到，正在重启实验…",
+                                "content": "重启信号已接收，请向用户回复确认消息。系统将在你回复后执行真正的重启。",
                             })
                         else:
                             tool_results.append({
@@ -607,10 +607,6 @@ class ClaudeClient:
                         })
                 history.append({"role": "user", "content": tool_results})
 
-                # If restart was requested, break immediately so routes.py can act
-                if needs_restart:
-                    break
-
                 # If Claude signalled end_turn alongside tool use, break after
                 # processing results (it will have text to show already).
                 if response.stop_reason == "end_turn":
@@ -627,5 +623,5 @@ class ClaudeClient:
                 if block.type == "text":
                     reply_parts.append(block.text)
 
-        reply_text = "\n".join(reply_parts) if reply_parts else "(Sub Agent 未返回有效回复)"
+        reply_text = "\n".join(reply_parts) if reply_parts else "操作已执行完毕。"
         return SubAgentResult(text=reply_text, needs_restart=needs_restart)
