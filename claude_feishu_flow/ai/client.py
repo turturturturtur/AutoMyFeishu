@@ -11,6 +11,7 @@ from typing import AsyncIterator, Optional
 import anthropic
 
 from claude_feishu_flow.ai.prompt import (
+    build_casual_chat_prompt,
     build_edit_chat_system_prompt,
     build_fix_system_prompt,
     build_sub_agent_system_prompt,
@@ -256,6 +257,44 @@ class ClaudeClient:
             if block.type == "text":
                 return block.text
         return "(Claude 未返回有效摘要)"
+
+    async def chat_casual(
+        self,
+        user_text: str,
+        images: list[dict] | None = None,
+    ) -> str:
+        """Single-turn casual chat, no tool use.
+
+        Args:
+            user_text: The user's message.
+            images:    Optional list of {"media_type": ..., "base64_data": ...} dicts.
+
+        Returns:
+            The model's text reply.
+        """
+        content: list = []
+        if images:
+            for img in images:
+                content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": img["media_type"],
+                        "data": img["base64_data"],
+                    },
+                })
+        content.append({"type": "text", "text": user_text})
+
+        response = await self._client.messages.create(
+            model=self._model,
+            max_tokens=2048,
+            system=build_casual_chat_prompt(),
+            messages=[{"role": "user", "content": content}],
+        )
+        for block in response.content:
+            if block.type == "text":
+                return block.text
+        return "(未返回有效回复)"
 
     async def chat_edit(
         self,

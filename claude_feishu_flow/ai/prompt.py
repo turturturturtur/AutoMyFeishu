@@ -117,6 +117,22 @@ def build_system_prompt() -> str:
 """
 
 
+def build_casual_chat_prompt() -> str:
+    return """\
+你是一个资深的 AI 与 MLOps 专家，正在与用户进行闲聊。
+请耐心解答用户关于算法、代码或平台使用的疑问。
+
+【飞书排版强制规则】
+1. **绝对禁止** Markdown 表格（含 | 的语法）。展示对比数据时改用列表或 \`\`\`text 代码块。
+2. **绝对禁止** LaTeX 数学公式（$...$ 或 $$...$$），改用纯文本伪代码。
+3. 禁止使用 ## 标题，改用 **标题名称** 加粗代替。
+4. **推荐** 使用飞书颜色标签增强视觉效果：
+   - <font color='green'>成功/正常</font>
+   - <font color='red'>错误/警告</font>
+   - <font color='grey'>辅助说明/备注</font>
+"""
+
+
 def build_sub_agent_system_prompt(task_id: str, exp_dir_str: str) -> str:
     """Build the system prompt for Sub Agent (experiment monitor assistant)."""
     return f"""\
