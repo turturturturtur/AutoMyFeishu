@@ -210,25 +210,56 @@ class Messaging:
             "tag": "markdown",
             "content": (
                 "**📖 使用帮助**\n\n"
-                "**新建实验**\n"
-                "```\n<实验描述>\n```\n\n"
-                "**列出所有实验**\n"
+
+                "**💬 闲聊 / 问答**\n"
+                "直接发送任意文字，与 AI 助手对话。\n"
+                "AI 可查询系统状态（GPU、内存、进程等）。\n\n"
+
+                "**🚀 新建实验**\n"
+                "```\n/launch <实验描述>\n```\n"
+                "示例：`/launch 帮我训练一个 MNIST 分类器`\n"
+                "系统会自动生成代码、执行、并汇报结果。\n\n"
+
+                "**🔁 新建实验 + 自动修复**\n"
+                "```\n/launch <实验描述> --retry <次数>\n```\n"
+                "示例：`/launch 帮我训练一个 MNIST 分类器 --retry 3`\n"
+                "脚本运行失败时，AI 自动分析错误并最多重试 N 次。\n"
+                "<font color='grey'>不加 --retry 则失败后直接汇报，不自动修复。</font>\n\n"
+
+                "**📋 列出所有实验**\n"
                 "```\n/list\n```\n\n"
-                "**修改已有实验**\n"
+
+                "**✏️ 修改已有实验**\n"
                 "```\n/edit exp_<uuid> <修改指令>\n```\n"
-                "示例：`/edit exp_19caeba9-bfac-440a-9314-7cfe0244a165 把输出改成英文`\n\n"
-                "**自动修复模式**\n"
-                "```\n<指令> --retry <次数>\n```\n"
-                "示例：`帮我分析数据 --retry 3`\n\n"
-                "**组合使用**\n"
-                "```\n/edit exp_<uuid> <修改指令> --retry 2\n```"
+                "示例：`/edit exp_19caeba9 把学习率改为 1e-4`\n"
+                "支持多轮对话，修改完毕后自动重新运行。\n\n"
+
+                "**✏️ 修改实验 + 自动修复**\n"
+                "```\n/edit exp_<uuid> <修改指令> --retry 2\n```\n\n"
+
+                "**❌ 取消编辑会话**\n"
+                "```\n/cancel\n```\n"
+                "取消当前正在进行的 /edit 多轮对话。\n\n"
+
+                "**🔬 进入实验专属对话（Sub Agent）**\n"
+                "点击实验卡片或 /list 列表中的 **进入会话** 按钮，\n"
+                "即可与该实验的专属 AI 助手对话。\n"
+                "Sub Agent 可读取日志、修改代码、重启实验。\n\n"
+
+                "**🚪 退出 Sub Agent 会话**\n"
+                "```\n/exit\n```\n"
+                "退出 Sub Agent 模式，返回主界面。\n\n"
+
+                "**🆘 帮助**\n"
+                "```\n/help\n```\n"
+                "显示此帮助卡片。"
             ),
         })
 
         card = {
             "config": {"wide_screen_mode": True},
             "header": {
-                "title": {"tag": "plain_text", "content": "❓ 命令帮助"},
+                "title": {"tag": "plain_text", "content": "📖 使用帮助 / Help"},
                 "template": "yellow",
             },
             "elements": elements,

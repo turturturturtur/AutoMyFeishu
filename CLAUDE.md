@@ -89,3 +89,4 @@ exp_<uuid>/
 # Edit
 - 每次编辑之后请进行git add 和git commit，保存git tree
 - 如果需要启动参数，则需要修改launch.sh
+- **每当新增、删除或修改任何用户可用命令时，必须同步更新 `feishu/messaging.py` 中的 `send_help_card` 内容，确保 `/help` 卡片始终与实际命令保持一致。**

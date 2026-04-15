@@ -231,6 +231,14 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
         await _handle_list(chat_id, svc, reply_message_id=event.message_id)
         return
 
+    if user_text.strip() == "/help":
+        await svc.messaging.send_help_card(
+            receive_id=chat_id,
+            receive_id_type="chat_id",
+            reply_message_id=event.message_id,
+        )
+        return
+
     if user_text.strip() == "/cancel":
         if chat_id in svc.edit_sessions:
             svc.edit_sessions[chat_id].queue.put_nowait(None)  # sentinel to stop loop
