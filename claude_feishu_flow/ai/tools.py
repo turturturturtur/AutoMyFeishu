@@ -16,6 +16,8 @@ Main Agent (Orchestrator) tools (MAIN_AGENT_TOOLS):
   review_experiment        — blocking: trigger standalone code review (no execution)
   plot_experiment_metrics  — generate a matplotlib chart from run.log → results/plot.png
   create_cron_job          — blocking: register a recurring scheduled task
+  list_cron_jobs           — inline: list all active scheduled jobs
+  cancel_cron_job          — inline: cancel a scheduled job by ID
   write_document           — blocking: draft a long Markdown document or technical report
 """
 
@@ -242,6 +244,27 @@ CREATE_CRON_JOB_TOOL: dict = {
     },
 }
 
+LIST_CRON_JOBS_TOOL: dict = {
+    "name": "list_cron_jobs",
+    "description": "列出当前后台正在运行的所有定时任务的 ID、触发规则（cron 表达式）和任务描述。用户询问「有哪些定时任务」「已有的定时任务」时调用。",
+    "input_schema": {"type": "object", "properties": {}, "required": []},
+}
+
+CANCEL_CRON_JOB_TOOL: dict = {
+    "name": "cancel_cron_job",
+    "description": "根据任务 ID 取消指定的定时任务。在取消之前，如果不知道 job_id，请先调用 list_cron_jobs 查找。",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "job_id": {
+                "type": "string",
+                "description": "要取消的定时任务 ID（由 create_cron_job 返回，或通过 list_cron_jobs 查得）。",
+            },
+        },
+        "required": ["job_id"],
+    },
+}
+
 WRITE_DOCUMENT_TOOL: dict = {
     "name": "write_document",
     "description": (
@@ -276,6 +299,8 @@ MAIN_AGENT_TOOLS: list[dict] = [
     REVIEW_EXPERIMENT_TOOL,
     PLOT_METRICS_TOOL,
     CREATE_CRON_JOB_TOOL,
+    LIST_CRON_JOBS_TOOL,
+    CANCEL_CRON_JOB_TOOL,
     WRITE_DOCUMENT_TOOL,
 ]
 

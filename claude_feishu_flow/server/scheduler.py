@@ -97,6 +97,37 @@ class SchedulerManager:
         )
         return job.id
 
+    def list_jobs(self) -> str:
+        """Return a human-readable summary of all scheduled jobs.
+
+        Called by the list_cron_jobs tool handler in chat_main_agent.
+        """
+        jobs = self._scheduler.get_jobs()
+        if not jobs:
+            return "当前无运行中的定时任务。"
+        lines: list[str] = []
+        for job in jobs:
+            trigger_str = str(job.trigger)
+            kwargs = job.kwargs or {}
+            desc = kwargs.get("task_description", "(无描述)")
+            lines.append(f"- ID: {job.id}\n  触发规则: {trigger_str}\n  描述: {desc}")
+        return "\n".join(lines)
+
+    def cancel_job(self, job_id: str) -> str:
+        """Remove a scheduled job by ID.
+
+        Called by the cancel_cron_job tool handler in chat_main_agent.
+
+        Returns a human-readable success/failure message.
+        """
+        try:
+            self._scheduler.remove_job(job_id)
+            logger.info("Cron job cancelled: id=%s", job_id)
+            return f"✅ 定时任务 {job_id} 已成功取消。"
+        except Exception:
+            logger.warning("cancel_job: job_id=%s not found", job_id)
+            return f"❌ 找不到 ID 为 {job_id!r} 的定时任务，可能已被取消或从未存在。"
+
     # ------------------------------------------------------------------
     # Internal callback
     # ------------------------------------------------------------------
@@ -121,6 +152,7 @@ class SchedulerManager:
                 user_text=trigger_text,
                 exp_base_dir=svc.config.resolved_experiments_dir(),
                 history=history,
+                scheduler=self,
             )
             if result.text:
                 await svc.messaging.send_markdown(chat_id, result.text)

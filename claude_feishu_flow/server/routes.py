@@ -529,6 +529,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                 exp_base_dir=exp_base_dir,
                 images=images if images else None,
                 history=history,
+                scheduler=svc.scheduler,
             )
             if result.text:
                 await svc.messaging.send_markdown(

@@ -356,6 +356,7 @@ class ClaudeClient:
         exp_base_dir: Path,
         images: list[dict] | None = None,
         history: list[dict] | None = None,
+        scheduler: Any | None = None,
     ) -> MainAgentResult:
         """Orchestrator agent: understands natural language and triggers experiment operations.
 
@@ -363,6 +364,8 @@ class ClaudeClient:
           - execute_bash_command
           - list_experiments
           - plot_experiment_metrics
+          - list_cron_jobs
+          - cancel_cron_job
 
         Blocking tools (exit loop immediately, return action):
           - launch_experiment
@@ -375,6 +378,7 @@ class ClaudeClient:
             exp_base_dir:  Path to the experiments root directory (for list_experiments).
             images:        Optional list of {"media_type": ..., "base64_data": ...} dicts.
             history:       Mutable list of conversation messages (mutated in place for persistence).
+            scheduler:     SchedulerManager instance for list_cron_jobs/cancel_cron_job tools.
 
         Returns:
             MainAgentResult with the model's text reply and an optional action.
@@ -545,6 +549,28 @@ class ClaudeClient:
                         "type": "tool_result",
                         "tool_use_id": block.id,
                         "content": tool_result_text,
+                    })
+
+                elif tool_name == "list_cron_jobs":
+                    if scheduler is not None:
+                        result_text = scheduler.list_jobs()
+                    else:
+                        result_text = "定时任务功能未启用（scheduler 未初始化）。"
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_text,
+                    })
+
+                elif tool_name == "cancel_cron_job":
+                    if scheduler is not None:
+                        result_text = scheduler.cancel_job(block.input.get("job_id", ""))
+                    else:
+                        result_text = "定时任务功能未启用（scheduler 未初始化）。"
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_text,
                     })
 
                 else:

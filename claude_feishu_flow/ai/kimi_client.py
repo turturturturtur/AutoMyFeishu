@@ -343,6 +343,7 @@ class KimiClient:
         exp_base_dir: Path,
         images: list[dict] | None = None,
         history: list[dict] | None = None,
+        scheduler=None,
     ) -> MainAgentResult:
         """Orchestrator agent (Kimi): understands natural language and triggers experiment operations.
 
@@ -363,6 +364,7 @@ class KimiClient:
             images:        Optional list of {"media_type": ..., "base64_data": ...} dicts.
             history:       Mutable list of conversation messages (mutated in place for persistence).
                            Stores only user/assistant text turns (no tool call internals).
+            scheduler:     SchedulerManager instance for list_cron_jobs/cancel_cron_job tools.
 
         Returns:
             MainAgentResult with the model's text reply and an optional action.
@@ -530,6 +532,20 @@ class KimiClient:
                     else:
                         tool_result_text = result_str
                     messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result_text})
+
+                elif tool_name == "list_cron_jobs":
+                    if scheduler is not None:
+                        result_text = scheduler.list_jobs()
+                    else:
+                        result_text = "定时任务功能未启用（scheduler 未初始化）。"
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+
+                elif tool_name == "cancel_cron_job":
+                    if scheduler is not None:
+                        result_text = scheduler.cancel_job(tool_input.get("job_id", ""))
+                    else:
+                        result_text = "定时任务功能未启用（scheduler 未初始化）。"
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
 
                 else:
                     messages.append({
