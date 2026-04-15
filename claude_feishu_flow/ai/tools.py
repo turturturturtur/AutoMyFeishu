@@ -354,9 +354,11 @@ async def handle_execute_bash(inputs: dict, exp_dir: Path) -> str:
 
 
 async def handle_list_experiments(exp_base_dir: Path) -> str:
-    """List experiment directories under exp_base_dir.
+    """List experiment directories under exp_base_dir with purpose and live metrics.
 
     Returns a plain-text summary (newest first) that the model can read and describe.
+    Includes experiment purpose (from plan.md), status, and live training metrics
+    extracted from output/run.log when available.
 
     Args:
         exp_base_dir: The experiments root directory (e.g. Experiments/).
@@ -365,6 +367,7 @@ async def handle_list_experiments(exp_base_dir: Path) -> str:
         Multi-line string with one entry per experiment, or a "no experiments" message.
     """
     import datetime
+    import re
 
     if not exp_base_dir.exists():
         return "暂无实验记录（实验目录不存在）。"
@@ -375,9 +378,69 @@ async def handle_list_experiments(exp_base_dir: Path) -> str:
     )
     if not entries:
         return "暂无实验记录。"
+
     lines: list[str] = []
     for d in entries:
         mtime = datetime.datetime.fromtimestamp(d.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
         status = "已完成" if (d / "results" / "summary.md").exists() else "未完成/运行中"
-        lines.append(f"- {d.name}  [{status}]  {mtime}")
+
+        # Extract experiment purpose from plan.md (first 80 non-empty chars)
+        purpose = ""
+        plan_path = d / "setting" / "plan.md"
+        if plan_path.exists():
+            try:
+                plan_text = plan_path.read_text(encoding="utf-8", errors="replace")
+                # Strip leading markdown headers and whitespace
+                cleaned = re.sub(r"^#+\s*", "", plan_text.strip(), flags=re.MULTILINE)
+                first_line = next((ln.strip() for ln in cleaned.splitlines() if ln.strip()), "")
+                purpose = first_line[:80]
+            except Exception:
+                pass
+
+        entry = f"- {d.name}  [{status}]  {mtime}"
+        if purpose:
+            entry += f"\n  目的: {purpose}"
+
+        # Extract live metrics from run.log (last 200 lines)
+        log_path = d / "output" / "run.log"
+        if log_path.exists():
+            try:
+                log_text = log_path.read_text(encoding="utf-8", errors="replace")
+                log_lines = log_text.splitlines()[-200:]
+                tail = "\n".join(log_lines)
+
+                metrics: dict[str, str] = {}
+
+                # Epoch progress: "Epoch 3/10" or "epoch: 3"
+                m = re.search(r"[Ee]poch[:\s]+(\d+)\s*/\s*(\d+)", tail)
+                if not m:
+                    m = re.search(r"[Ee]poch[:\s]+(\d+)", tail)
+                if m:
+                    metrics["Epoch"] = "/".join(m.groups()) if len(m.groups()) == 2 else m.group(1)
+
+                # Loss: "loss: 0.1234" or "Loss=0.1234"
+                m = re.search(r"[Ll]oss[=:\s]+([\d.]+(?:e[+-]?\d+)?)", tail)
+                if m:
+                    metrics["Loss"] = m.group(1)
+
+                # Accuracy: "acc: 0.95" or "accuracy: 95.3%"
+                m = re.search(r"(?:acc(?:uracy)?)[=:\s]+([\d.]+%?)", tail, re.IGNORECASE)
+                if m:
+                    metrics["Acc"] = m.group(1)
+
+                # ETA: "ETA: 0:02:33" or "time left: 5 min"
+                m = re.search(r"ETA[:\s]+([\d:]+)", tail, re.IGNORECASE)
+                if not m:
+                    m = re.search(r"time\s+left[:\s]+([\d]+\s*(?:min|s|sec|hour))", tail, re.IGNORECASE)
+                if m:
+                    metrics["ETA"] = m.group(1)
+
+                if metrics:
+                    metrics_str = "  ".join(f"{k}: {v}" for k, v in metrics.items())
+                    entry += f"\n  Metrics: {metrics_str}"
+            except Exception:
+                pass
+
+        lines.append(entry)
+
     return "\n".join(lines)
