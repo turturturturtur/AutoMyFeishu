@@ -149,9 +149,10 @@ async def feishu_webhook(
             await svc.messaging.send_text(
                 chat_id,
                 f"已退出实验 `{old_session}` 的会话，回到主界面。",
+                reply_message_id=event.message_id,
             )
         else:
-            await svc.messaging.send_text(chat_id, "当前没有活跃的实验会话。")
+            await svc.messaging.send_text(chat_id, "当前没有活跃的实验会话。", reply_message_id=event.message_id)
         if event.message_id:
             svc.processing_ids.discard(event.message_id)
         return JSONResponse({"code": 0, "msg": "exit_handled"})
@@ -210,13 +211,13 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
     exp_dir: Path
 
     if user_text.strip() == "/list":
-        await _handle_list(chat_id, svc)
+        await _handle_list(chat_id, svc, reply_message_id=event.message_id)
         return
 
     if user_text.strip() == "/cancel":
         if chat_id in svc.edit_sessions:
             svc.edit_sessions[chat_id].queue.put_nowait(None)  # sentinel to stop loop
-        await svc.messaging.send_text(chat_id, "✅ 编辑会话已取消。")
+        await svc.messaging.send_text(chat_id, "✅ 编辑会话已取消。", reply_message_id=event.message_id)
         return
 
     if user_text.startswith("/edit"):
@@ -230,6 +231,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                     f"无法解析 `/edit` 指令：`{user_text[:200]}`\n\n"
                     "正确格式：`/edit exp_<uuid> <修改指令>`"
                 ),
+                reply_message_id=event.message_id,
             )
             return
         task_id = edit_match.group(1)
@@ -240,6 +242,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                 receive_id=chat_id,
                 receive_id_type="chat_id",
                 error_msg=f"实验 `{task_id}` 不存在或尚未生成脚本，无法编辑。",
+                reply_message_id=event.message_id,
             )
             return
 
@@ -282,6 +285,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
             await svc.messaging.send_text(
                 chat_id,
                 "请在 /launch 后附上实验指令，例如：/launch 训练一个线性回归模型",
+                reply_message_id=event.message_id,
             )
             if event.message_id:
                 svc.processing_ids.discard(event.message_id)
@@ -300,11 +304,11 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
 
         async def notify(text: str) -> None:
             try:
-                await svc.messaging.send_text(chat_id, text)
+                await svc.messaging.send_text(chat_id, text, reply_message_id=event.message_id)
             except Exception as exc:
                 logger.warning("Failed to send notification: %s", exc)
 
-        loading_msg_id = await svc.messaging.send_text(chat_id, "⏳ 正在处理中，请稍候...")
+        loading_msg_id = await svc.messaging.send_text(chat_id, "⏳ 正在处理中，请稍候...", reply_message_id=event.message_id)
         try:
             # ── Phase A: Generation ───────────────────────────────────────────
             await notify("正在理解需求，生成实验计划和脚本，请稍候...")
@@ -342,6 +346,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                 max_retries=max_retries,
                 svc=svc,
                 notify=notify,
+                reply_message_id=event.message_id,
             )
 
         except asyncio.TimeoutError:
@@ -371,23 +376,23 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                 except Exception as exc:
                     logger.warning("Failed to download image %s: %s", img_key, exc)
 
-        loading_msg_id = await svc.messaging.send_text(chat_id, "⏳ 正在思考中，请稍候...")
+        loading_msg_id = await svc.messaging.send_text(chat_id, "⏳ 正在思考中，请稍候...", reply_message_id=event.message_id)
         try:
             reply_text = await svc.ai.chat_casual(
                 user_text=user_text or "(用户发送了图片)",
                 images=images if images else None,
             )
-            await svc.messaging.send_markdown(chat_id, reply_text)
+            await svc.messaging.send_markdown(chat_id, reply_text, reply_message_id=event.message_id)
         except Exception as exc:
             logger.exception("Casual chat failed: %s", exc)
-            await svc.messaging.send_text(chat_id, f"❌ 发生错误：{exc}")
+            await svc.messaging.send_text(chat_id, f"❌ 发生错误：{exc}", reply_message_id=event.message_id)
         finally:
             await svc.messaging.delete_message(loading_msg_id)
             if event.message_id:
                 svc.processing_ids.discard(event.message_id)
 
 
-async def _handle_list(chat_id: str, svc) -> None:  # type: ignore[no-untyped-def]
+async def _handle_list(chat_id: str, svc, reply_message_id: str | None = None) -> None:  # type: ignore[no-untyped-def]
     """List all experiment directories and send a summary card."""
     experiments_dir = svc.config.resolved_experiments_dir()
     entries = sorted(
@@ -400,6 +405,7 @@ async def _handle_list(chat_id: str, svc) -> None:  # type: ignore[no-untyped-de
         receive_id=chat_id,
         receive_id_type="chat_id",
         entries=entries,
+        reply_message_id=reply_message_id,
     )
 
 
@@ -453,6 +459,7 @@ async def _handle_sub_agent_message(
         await svc.messaging.send_text(
             chat_id,
             f"实验 `{task_id}` 已不存在，自动退出会话。",
+            reply_message_id=event_message_id,
         )
         if event_message_id:
             svc.processing_ids.discard(event_message_id)
@@ -468,7 +475,7 @@ async def _handle_sub_agent_message(
     history = svc.sub_agent_histories[task_id]
     lock = svc.sub_agent_locks[task_id]
 
-    loading_msg_id = await svc.messaging.send_text(chat_id, "⏳ 正在处理中，请稍候...")
+    loading_msg_id = await svc.messaging.send_text(chat_id, "⏳ 正在处理中，请稍候...", reply_message_id=event_message_id)
     try:
         async with lock:
             result: SubAgentResult = await svc.ai.chat_with_sub_agent(
@@ -477,7 +484,7 @@ async def _handle_sub_agent_message(
                 exp_dir=exp_dir,
                 history=history,
             )
-        await svc.messaging.send_markdown(chat_id, result.text)
+        await svc.messaging.send_markdown(chat_id, result.text, reply_message_id=event_message_id)
         if result.needs_restart:
             asyncio.create_task(
                 _restart_and_notify(
@@ -485,11 +492,12 @@ async def _handle_sub_agent_message(
                     task_id=task_id,
                     exp_dir=exp_dir,
                     chat_id=chat_id,
+                    reply_message_id=event_message_id,
                 )
             )
     except Exception as exc:
         logger.exception("Sub agent error for task=%s: %s", task_id, exc)
-        await svc.messaging.send_text(chat_id, f"Sub Agent 出错：{exc}")
+        await svc.messaging.send_text(chat_id, f"Sub Agent 出错：{exc}", reply_message_id=event_message_id)
     finally:
         await svc.messaging.delete_message(loading_msg_id)
         if event_message_id:
@@ -505,9 +513,10 @@ async def _restart_and_notify(
     task_id: str,
     exp_dir: Path,
     chat_id: str,
+    reply_message_id: str | None = None,
 ) -> None:
     """Kill any running process for task_id, start a fresh one, then report."""
-    await svc.messaging.send_text(chat_id, "🚀 Sub Agent 已为您更新代码并重启实验！")
+    await svc.messaging.send_text(chat_id, "🚀 Sub Agent 已为您更新代码并重启实验！", reply_message_id=reply_message_id)
     try:
         result = await svc.executor.run(exp_dir, task_id)
         if result.was_killed:
@@ -536,12 +545,13 @@ async def _restart_and_notify(
             status=status,
             duration=result.duration_seconds,
             repair_count=0,
+            reply_message_id=reply_message_id,
         )
     except asyncio.TimeoutError:
-        await svc.messaging.send_text(chat_id, "⏰ 重启后的实验执行超时，任务已终止。")
+        await svc.messaging.send_text(chat_id, "⏰ 重启后的实验执行超时，任务已终止。", reply_message_id=reply_message_id)
     except Exception as exc:
         logger.exception("_restart_and_notify failed for task=%s: %s", task_id, exc)
-        await svc.messaging.send_text(chat_id, f"❌ 重启实验时出错：{exc}")
+        await svc.messaging.send_text(chat_id, f"❌ 重启实验时出错：{exc}", reply_message_id=reply_message_id)
 
 
 # ---------------------------------------------------------------------------
@@ -556,6 +566,7 @@ async def _run_phase_b_and_c(
     max_retries: int,
     svc,  # type: ignore[no-untyped-def]
     notify,  # async callable(str)
+    reply_message_id: str | None = None,
 ) -> None:
     """Execute setting/main.py with optional self-healing, then run AI analysis
     and send the final experiment card.  Raises on unrecoverable errors."""
@@ -635,6 +646,7 @@ async def _run_phase_b_and_c(
         status=status,
         duration=result.duration_seconds,
         repair_count=repair_count,
+        reply_message_id=reply_message_id,
     )
 
 
@@ -653,20 +665,20 @@ async def _handle_edit_session(
 
     async def notify(text: str) -> None:
         try:
-            await svc.messaging.send_text(chat_id, text)
+            await svc.messaging.send_text(chat_id, text, reply_message_id=event_message_id)
         except Exception as exc:
             logger.warning("Failed to send notification: %s", exc)
 
     async def reply(text: str) -> None:
         try:
-            await svc.messaging.send_markdown(chat_id, text)
+            await svc.messaging.send_markdown(chat_id, text, reply_message_id=event_message_id)
         except Exception as exc:
             logger.warning("Failed to send markdown reply: %s", exc)
 
     exp_dir = session.exp_dir
     task_id = session.task_id
 
-    loading_msg_id = await svc.messaging.send_text(chat_id, "⏳ 正在处理中，请稍候...")
+    loading_msg_id = await svc.messaging.send_text(chat_id, "⏳ 正在处理中，请稍候...", reply_message_id=event_message_id)
     try:
         await notify(
             f"🗣️ 已进入编辑对话模式，实验 ID：{task_id}\n"
@@ -696,6 +708,7 @@ async def _handle_edit_session(
             max_retries=session.max_retries,
             svc=svc,
             notify=notify,
+            reply_message_id=event_message_id,
         )
 
     except asyncio.TimeoutError:

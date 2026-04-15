@@ -27,18 +27,28 @@ class Messaging:
         receive_id: str,
         text: str,
         receive_id_type: ReceiveIdType = "chat_id",
+        reply_message_id: str | None = None,
     ) -> str:
-        """Send a plain-text message. Returns the created message_id."""
-        payload = {
-            "receive_id": receive_id,
-            "msg_type": "text",
-            "content": json.dumps({"text": text}),
-        }
-        data = await self._client.post(
-            _SEND_MSG_PATH,
-            payload,
-            params={"receive_id_type": receive_id_type},
-        )
+        """Send a plain-text message. Returns the created message_id.
+
+        If reply_message_id is provided, uses the Reply API to quote that message.
+        """
+        content = json.dumps({"text": text})
+        if reply_message_id:
+            path = f"/im/v1/messages/{reply_message_id}/reply"
+            payload = {"msg_type": "text", "content": content}
+            data = await self._client.post(path, payload)
+        else:
+            payload = {
+                "receive_id": receive_id,
+                "msg_type": "text",
+                "content": content,
+            }
+            data = await self._client.post(
+                _SEND_MSG_PATH,
+                payload,
+                params={"receive_id_type": receive_id_type},
+            )
         message_id: str = data.get("data", {}).get("message_id", "")
         logger.info("Sent text message to %s; message_id=%s", receive_id, message_id)
         return message_id
@@ -48,18 +58,28 @@ class Messaging:
         receive_id: str,
         card: dict,
         receive_id_type: ReceiveIdType = "chat_id",
+        reply_message_id: str | None = None,
     ) -> str:
-        """Send an interactive card message. Returns the created message_id."""
-        payload = {
-            "receive_id": receive_id,
-            "msg_type": "interactive",
-            "content": json.dumps(card),
-        }
-        data = await self._client.post(
-            _SEND_MSG_PATH,
-            payload,
-            params={"receive_id_type": receive_id_type},
-        )
+        """Send an interactive card message. Returns the created message_id.
+
+        If reply_message_id is provided, uses the Reply API to quote that message.
+        """
+        content = json.dumps(card)
+        if reply_message_id:
+            path = f"/im/v1/messages/{reply_message_id}/reply"
+            payload = {"msg_type": "interactive", "content": content}
+            data = await self._client.post(path, payload)
+        else:
+            payload = {
+                "receive_id": receive_id,
+                "msg_type": "interactive",
+                "content": content,
+            }
+            data = await self._client.post(
+                _SEND_MSG_PATH,
+                payload,
+                params={"receive_id_type": receive_id_type},
+            )
         message_id: str = data.get("data", {}).get("message_id", "")
         logger.info("Sent card message to %s; message_id=%s", receive_id, message_id)
         return message_id
@@ -69,13 +89,14 @@ class Messaging:
         receive_id: str,
         markdown_text: str,
         receive_id_type: ReceiveIdType = "chat_id",
+        reply_message_id: str | None = None,
     ) -> str:
         """Send a headerless interactive card that renders markdown_text as Markdown."""
         card = {
             "config": {"wide_screen_mode": True},
             "elements": [{"tag": "markdown", "content": markdown_text}],
         }
-        return await self.send_card(receive_id, card, receive_id_type=receive_id_type)
+        return await self.send_card(receive_id, card, receive_id_type=receive_id_type, reply_message_id=reply_message_id)
 
     async def delete_message(self, message_id: str) -> None:
         """撤回一条消息。失败只记录 warning，不抛异常，避免中断主流程。"""
@@ -96,6 +117,7 @@ class Messaging:
         status: str,
         duration: float,
         repair_count: int = 0,
+        reply_message_id: str | None = None,
     ) -> str:
         """Send a structured experiment report card.
 
@@ -144,13 +166,14 @@ class Messaging:
                 element_analysis,
             ],
         }
-        return await self.send_card(receive_id, card, receive_id_type=receive_id_type)  # type: ignore[arg-type]
+        return await self.send_card(receive_id, card, receive_id_type=receive_id_type, reply_message_id=reply_message_id)  # type: ignore[arg-type]
 
     async def send_help_card(
         self,
         receive_id: str,
         receive_id_type: str,
         error_msg: str = "",
+        reply_message_id: str | None = None,
     ) -> str:
         """Send a help card showing available commands and usage.
 
@@ -197,13 +220,14 @@ class Messaging:
             },
             "elements": elements,
         }
-        return await self.send_card(receive_id, card, receive_id_type=receive_id_type)  # type: ignore[arg-type]
+        return await self.send_card(receive_id, card, receive_id_type=receive_id_type, reply_message_id=reply_message_id)  # type: ignore[arg-type]
 
     async def send_list_card(
         self,
         receive_id: str,
         receive_id_type: str,
         entries: list[Path],
+        reply_message_id: str | None = None,
     ) -> str:
         """Send a card listing all existing experiments.
 
@@ -259,4 +283,4 @@ class Messaging:
                 },
             ],
         }
-        return await self.send_card(receive_id, card, receive_id_type=receive_id_type)  # type: ignore[arg-type]
+        return await self.send_card(receive_id, card, receive_id_type=receive_id_type, reply_message_id=reply_message_id)  # type: ignore[arg-type]
