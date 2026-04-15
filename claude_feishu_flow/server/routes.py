@@ -23,6 +23,10 @@ router = APIRouter()
 _LOG_TAIL_RUN = 4000    # chars from run.log tail fed to Claude
 _LOG_TAIL_ERR = 1000    # chars from error.log tail fed to Claude
 _PLAN_CARD_MAX = 500    # chars of plan.md shown in card summary
+_SUPPORTED_TEXT_SUFFIXES = frozenset({
+    ".md", ".txt", ".json", ".csv", ".py",
+    ".yaml", ".yml", ".toml", ".rst", ".log", ".html", ".xml",
+})
 
 
 def _tail_file(path: Path, max_chars: int) -> str:
@@ -127,7 +131,7 @@ async def feishu_webhook(
     if event.event_type != "im.message.receive_v1":
         return JSONResponse({"code": 0, "msg": "ignored"})
 
-    has_content = (event.text and event.text.strip()) or event.image_keys
+    has_content = (event.text and event.text.strip()) or event.image_keys or event.files
     if not has_content:
         return JSONResponse({"code": 0, "msg": "empty message ignored"})
 
@@ -172,6 +176,7 @@ async def feishu_webhook(
             user_text=user_text,
             svc=svc,
             event_message_id=event.message_id,
+            event=event,
         )
         return JSONResponse({"code": 0, "msg": "routed_by_parent_id"})
 
@@ -186,6 +191,7 @@ async def feishu_webhook(
             user_text=user_text,
             svc=svc,
             event_message_id=event.message_id,
+            event=event,
         )
         return JSONResponse({"code": 0, "msg": "routed_to_sub_agent"})
 
@@ -202,6 +208,44 @@ async def feishu_webhook(
     # ── Register background task and IMMEDIATELY return 200 ───────────────
     background_tasks.add_task(_handle_message, event=event, svc=svc)
     return JSONResponse({"code": 0, "msg": "accepted"})
+
+
+# ---------------------------------------------------------------------------
+# Attachment text extraction helper
+# ---------------------------------------------------------------------------
+
+async def _extract_file_contents(event, svc) -> str:  # type: ignore[no-untyped-def]
+    """Download file attachments from the event and return their extracted text.
+
+    Supports plaintext extensions (utf-8 decode) and PDF (via PyMuPDF).
+    Unsupported types are skipped with a warning.
+    """
+    if not getattr(event, "files", None) or not event.message_id:
+        return ""
+    parts: list[str] = []
+    for file_key, file_name in event.files:
+        try:
+            file_bytes = await svc.feishu.download_resource(
+                message_id=event.message_id,
+                file_key=file_key,
+                resource_type="file",
+            )
+            suffix = Path(file_name).suffix.lower()
+            if suffix in _SUPPORTED_TEXT_SUFFIXES:
+                extracted = file_bytes.decode("utf-8", errors="replace")
+            elif suffix == ".pdf":
+                import pymupdf  # lazy import — avoid startup cost when PDF unused
+                doc = pymupdf.open(stream=file_bytes, filetype="pdf")
+                extracted = "\n".join(page.get_text() for page in doc)
+                doc.close()
+            else:
+                logger.warning("Unsupported attachment type, skipping: %s", file_name)
+                continue
+            parts.append(f"\n\n[附件 {file_name} 内容:]\n{extracted}")
+            logger.info("Extracted %d chars from attachment %s", len(extracted), file_name)
+        except Exception as exc:
+            logger.warning("Failed to process attachment %s: %s", file_name, exc)
+    return "".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +352,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
     if user_text.startswith("/launch"):
         # ── /launch Fast Path ─────────────────────────────────────────────
         launch_text = user_text[len("/launch"):].strip()
-        if not launch_text:
+        if not launch_text and not event.image_keys and not event.files:
             await svc.messaging.send_text(
                 chat_id,
                 "请在 /launch 后附上实验指令，例如：/launch 训练一个线性回归模型",
@@ -346,6 +390,11 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                 except Exception as exc:
                     logger.warning("Failed to download image %s: %s", img_key, exc)
 
+        # Extract and append file attachment text
+        file_text = await _extract_file_contents(event, svc)
+        if file_text:
+            launch_text = launch_text + file_text
+
         loading_msg_id = await svc.messaging.send_text(
             chat_id, "⏳ 正在处理中，请稍候...", reply_message_id=event.message_id
         )
@@ -382,13 +431,18 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                 except Exception as exc:
                     logger.warning("Failed to download image %s: %s", img_key, exc)
 
+        # Extract and append file attachment text
+        file_text = await _extract_file_contents(event, svc)
+        if file_text:
+            user_text = user_text + file_text
+
         exp_base_dir = svc.config.resolved_experiments_dir()
         loading_msg_id = await svc.messaging.send_text(
             chat_id, "⏳ 正在思考中，请稍候...", reply_message_id=event.message_id
         )
         try:
             result: MainAgentResult = await svc.ai.chat_main_agent(
-                user_text=user_text or "(用户发送了图片)",
+                user_text=user_text or "(用户发送了图片或文件)",
                 exp_base_dir=exp_base_dir,
                 images=images if images else None,
             )
@@ -574,6 +628,7 @@ async def _handle_sub_agent_message(
     user_text: str,
     svc,  # type: ignore[no-untyped-def]
     event_message_id: str | None = None,
+    event=None,  # type: ignore[no-untyped-def]  # WebhookEvent; optional for file extraction
 ) -> None:
     """Forward a user message to the Sub Agent for a specific experiment."""
     exp_dir = svc.config.resolved_experiments_dir() / task_id
@@ -589,6 +644,12 @@ async def _handle_sub_agent_message(
         if event_message_id:
             svc.processing_ids.discard(event_message_id)
         return
+
+    # Extract file attachment text (e.g. user sends a .py file: "replace with this and restart")
+    if event is not None:
+        file_text = await _extract_file_contents(event, svc)
+        if file_text:
+            user_text = (user_text or "(用户发送了文件)") + file_text
 
     # Get or create conversation history and per-task lock for this experiment.
     # The lock serialises concurrent turns so history is never mutated by two

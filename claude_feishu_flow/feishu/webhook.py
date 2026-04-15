@@ -79,6 +79,7 @@ class WebhookEvent:
     text: Optional[str] = None
     message_type: Optional[str] = None  # "text" | "image" | ...
     image_keys: list = field(default_factory=list)  # image_key values for message_type == "image"
+    files: list = field(default_factory=list)  # (file_key, file_name) tuples for message_type == "file"
     parent_id: Optional[str] = None   # 引用回复时，被引用的原始消息 ID
     # card.action.trigger fields (button clicks on interactive cards)
     action_tag: Optional[str] = None       # e.g. "button"
@@ -177,6 +178,7 @@ def parse_webhook_event(raw: dict) -> WebhookEvent:
 
         message_type: str = message.get("message_type", "text")
         image_keys: list = []
+        files: list = []  # (file_key, file_name) tuples
 
         # Extract plain text or image_key from message content JSON
         text: Optional[str] = None
@@ -189,6 +191,11 @@ def parse_webhook_event(raw: dict) -> WebhookEvent:
                 image_key = content_obj.get("image_key", "")
                 if image_key:
                     image_keys.append(image_key)
+            elif message_type == "file":
+                file_key = content_obj.get("file_key", "")
+                file_name = content_obj.get("file_name", "unknown_file")
+                if file_key:
+                    files.append((file_key, file_name))
         except (json.JSONDecodeError, AttributeError):
             logger.warning("Could not parse message content: %r", content_raw)
             text = content_raw
@@ -202,6 +209,7 @@ def parse_webhook_event(raw: dict) -> WebhookEvent:
             text=text,
             message_type=message_type,
             image_keys=image_keys,
+            files=files,
             parent_id=message.get("parent_id"),
             raw=raw,
         )

@@ -88,10 +88,15 @@ class FeishuClient:
         file_key: str,
         resource_type: str = "image",
     ) -> bytes:
-        """Download a message resource (image/file) and return raw bytes.
+        """Download a message resource and return raw bytes.
 
         API: GET /open-apis/im/v1/messages/{message_id}/resources/{file_key}?type={resource_type}
         Response is a binary stream, NOT JSON.
+
+        Args:
+            message_id:    The Feishu message ID containing the resource.
+            file_key:      The resource key (image_key for images, file_key for files).
+            resource_type: "image" for inline images, "file" for file attachments.
         """
         url = f"{self._base_url}/im/v1/messages/{message_id}/resources/{file_key}"
         headers = await self._headers()
