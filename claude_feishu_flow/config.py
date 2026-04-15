@@ -34,6 +34,7 @@ class Config(BaseSettings):
     # Kimi / Moonshot AI
     kimi_api_key: Optional[str] = None
     kimi_model: str = "moonshot-v1-32k"
+    kimi_base_url: str = "https://api.kimi.com/coding/v1"
 
     # Server
     host: str = "0.0.0.0"

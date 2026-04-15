@@ -80,14 +80,15 @@ class KimiClient:
         self,
         api_key: str,
         model: str = "moonshot-v1-32k",
+        base_url: str = _KIMI_BASE_URL,
     ) -> None:
         self._model = model
         self._client = openai.AsyncOpenAI(
             api_key=api_key,
-            base_url=_KIMI_BASE_URL,
+            base_url=base_url,
             default_headers={"User-Agent": "claude-code/0.1.0"},
         )
-        logger.info("KimiClient ready — model=%s  base_url=%s", self._model, _KIMI_BASE_URL)
+        logger.info("KimiClient ready — model=%s  base_url=%s", self._model, base_url)
 
     async def generate_experiment(
         self,
