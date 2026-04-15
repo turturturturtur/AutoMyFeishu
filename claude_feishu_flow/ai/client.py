@@ -14,11 +14,12 @@ from claude_feishu_flow.ai.prompt import (
     build_casual_chat_prompt,
     build_edit_chat_system_prompt,
     build_fix_system_prompt,
+    build_main_agent_prompt,
     build_sub_agent_system_prompt,
     build_system_prompt,
     build_summarize_system_prompt,
 )
-from claude_feishu_flow.ai.tools import ALL_TOOLS, EXECUTE_BASH_TOOL, SUB_AGENT_TOOLS, handle_execute_bash, handle_read_log, handle_save_script
+from claude_feishu_flow.ai.tools import ALL_TOOLS, EXECUTE_BASH_TOOL, MAIN_AGENT_TOOLS, SUB_AGENT_TOOLS, handle_execute_bash, handle_list_experiments, handle_read_log, handle_save_script, MainAgentResult
 
 logger = logging.getLogger(__name__)
 
@@ -332,6 +333,149 @@ class ClaudeClient:
                 if block.type == "text":
                     return block.text
         return "(未返回有效回复)"
+
+    _MAIN_AGENT_MAX_ROUNDS = 10
+
+    async def chat_main_agent(
+        self,
+        user_text: str,
+        exp_base_dir: Path,
+        images: list[dict] | None = None,
+    ) -> MainAgentResult:
+        """Orchestrator agent: understands natural language and triggers experiment operations.
+
+        Inline tools (executed locally, result fed back to model):
+          - execute_bash_command
+          - list_experiments
+
+        Blocking tools (exit loop immediately, return action):
+          - launch_experiment
+          - edit_experiment
+
+        Args:
+            user_text:     The user's raw message.
+            exp_base_dir:  Path to the experiments root directory (for list_experiments).
+            images:        Optional list of {"media_type": ..., "base64_data": ...} dicts.
+
+        Returns:
+            MainAgentResult with the model's text reply and an optional action.
+        """
+        content: list = []
+        if images:
+            for img in images:
+                content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": img["media_type"],
+                        "data": img["base64_data"],
+                    },
+                })
+        content.append({"type": "text", "text": user_text})
+
+        messages: list[dict] = [{"role": "user", "content": content}]
+        system_prompt = build_main_agent_prompt()
+        response = None
+
+        for round_num in range(1, self._MAIN_AGENT_MAX_ROUNDS + 1):
+            logger.info("chat_main_agent round %d", round_num)
+            response = await self._client.messages.create(
+                model=self._model,
+                max_tokens=2048,
+                system=system_prompt,
+                tools=MAIN_AGENT_TOOLS,
+                messages=messages,
+            )
+            messages.append({"role": "assistant", "content": response.content})
+
+            tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
+
+            if not tool_use_blocks:
+                for block in response.content:
+                    if block.type == "text":
+                        return MainAgentResult(text=block.text)
+                return MainAgentResult(text="(未返回有效回复)")
+
+            # Extract any partial text reply that accompanies tool calls
+            reply_text = ""
+            for block in response.content:
+                if block.type == "text":
+                    reply_text += block.text
+
+            tool_results: list[dict] = []
+            action_result: MainAgentResult | None = None
+
+            for block in tool_use_blocks:
+                tool_name: str = block.name
+                tool_input: dict = block.input
+
+                if tool_name == "launch_experiment":
+                    action_result = MainAgentResult(
+                        text=reply_text or "好的，正在为你启动实验...",
+                        action_type="launch",
+                        action_instruction=tool_input.get("instruction", ""),
+                    )
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": "launch_experiment 已触发，系统将接管后续流程。",
+                    })
+
+                elif tool_name == "edit_experiment":
+                    action_result = MainAgentResult(
+                        text=reply_text or "好的，正在为你进入编辑流程...",
+                        action_type="edit",
+                        action_task_id=tool_input.get("task_id", ""),
+                        action_instruction=tool_input.get("instruction", ""),
+                    )
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": "edit_experiment 已触发，系统将接管后续流程。",
+                    })
+
+                elif tool_name == "execute_bash_command":
+                    try:
+                        result_text = await handle_execute_bash(block.input, Path("."))
+                    except Exception as exc:
+                        result_text = f"工具执行失败：{exc}"
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_text,
+                    })
+
+                elif tool_name == "list_experiments":
+                    try:
+                        result_text = await handle_list_experiments(exp_base_dir)
+                    except Exception as exc:
+                        result_text = f"工具执行失败：{exc}"
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_text,
+                    })
+
+                else:
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": f"Unknown tool: {tool_name}",
+                    })
+
+            # Blocking tool found — exit immediately
+            if action_result is not None:
+                return action_result
+
+            # Inline tools — feed results back and continue
+            messages.append({"role": "user", "content": tool_results})
+
+        # Fallback after max rounds
+        if response is not None:
+            for block in response.content:
+                if block.type == "text":
+                    return MainAgentResult(text=block.text)
+        return MainAgentResult(text="(未返回有效回复)")
 
     async def chat_edit(
         self,

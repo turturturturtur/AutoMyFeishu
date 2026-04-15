@@ -7,11 +7,18 @@ Sub Agent tools (SUB_AGENT_TOOLS):
   read_realtime_log    — read tail of output/run.log
   save_script          — overwrite any file under setting/ (same tool, different context)
   restart_experiment   — signal the orchestrator to kill old process and restart with new code
+
+Main Agent (Orchestrator) tools (MAIN_AGENT_TOOLS):
+  execute_bash_command — run shell commands inline
+  list_experiments     — list experiment directories
+  launch_experiment    — blocking: trigger new experiment pipeline
+  edit_experiment      — blocking: trigger edit pipeline
 """
 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 from pathlib import Path
 
@@ -106,6 +113,82 @@ EXECUTE_BASH_TOOL: dict = {
 }
 
 SUB_AGENT_TOOLS: list[dict] = [READ_LOG_TOOL, SAVE_SCRIPT_TOOL, RESTART_EXPERIMENT_TOOL, EXECUTE_BASH_TOOL]
+
+
+# ---------------------------------------------------------------------------
+# Main Agent (Orchestrator) tools
+# ---------------------------------------------------------------------------
+
+LIST_EXPERIMENTS_TOOL: dict = {
+    "name": "list_experiments",
+    "description": "列出所有已有的实验，返回实验 ID、状态和创建时间。用户询问「有哪些实验」「实验列表」时调用。",
+    "input_schema": {"type": "object", "properties": {}, "required": []},
+}
+
+LAUNCH_EXPERIMENT_TOOL: dict = {
+    "name": "launch_experiment",
+    "description": (
+        "启动一个全新的实验。当用户想运行/启动/做一个新实验时调用。"
+        "调用后系统自动接管后续脚本生成和执行，无需其他操作。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "instruction": {
+                "type": "string",
+                "description": "用户的实验需求描述，原样传入，不要改写或截断。",
+            },
+        },
+        "required": ["instruction"],
+    },
+}
+
+EDIT_EXPERIMENT_TOOL: dict = {
+    "name": "edit_experiment",
+    "description": (
+        "修改一个已有的实验。需要明确指定 task_id（格式为 exp_<uuid>）和修改指令。"
+        "调用后系统自动接管编辑流程，无需其他操作。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "task_id": {
+                "type": "string",
+                "description": "要修改的实验 ID，格式为 exp_<uuid>。",
+            },
+            "instruction": {
+                "type": "string",
+                "description": "对实验的修改指令，例如「将学习率改为 1e-4」。",
+            },
+        },
+        "required": ["task_id", "instruction"],
+    },
+}
+
+MAIN_AGENT_TOOLS: list[dict] = [
+    EXECUTE_BASH_TOOL,
+    LIST_EXPERIMENTS_TOOL,
+    LAUNCH_EXPERIMENT_TOOL,
+    EDIT_EXPERIMENT_TOOL,
+]
+
+
+@dataclasses.dataclass
+class MainAgentResult:
+    """Return value from chat_main_agent.
+
+    text:               The model's conversational reply to send to the user.
+                        Always present, even when an action is being taken.
+    action_type:        "launch" | "edit" | None.
+                        When set, routes.py must start the corresponding pipeline.
+    action_task_id:     Populated only when action_type == "edit".
+    action_instruction: The instruction string for launch or edit pipelines.
+    """
+
+    text: str
+    action_type: str | None = None
+    action_task_id: str | None = None
+    action_instruction: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -247,3 +330,33 @@ async def handle_execute_bash(inputs: dict, exp_dir: Path) -> str:
         return combined
     except Exception as e:
         return f"[执行失败] {e}"
+
+
+async def handle_list_experiments(exp_base_dir: Path) -> str:
+    """List experiment directories under exp_base_dir.
+
+    Returns a plain-text summary (newest first) that the model can read and describe.
+
+    Args:
+        exp_base_dir: The experiments root directory (e.g. Experiments/).
+
+    Returns:
+        Multi-line string with one entry per experiment, or a "no experiments" message.
+    """
+    import datetime
+
+    if not exp_base_dir.exists():
+        return "暂无实验记录（实验目录不存在）。"
+    entries = sorted(
+        (d for d in exp_base_dir.iterdir() if d.is_dir() and d.name.startswith("exp_")),
+        key=lambda d: d.stat().st_mtime,
+        reverse=True,
+    )
+    if not entries:
+        return "暂无实验记录。"
+    lines: list[str] = []
+    for d in entries:
+        mtime = datetime.datetime.fromtimestamp(d.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+        status = "已完成" if (d / "results" / "summary.md").exists() else "未完成/运行中"
+        lines.append(f"- {d.name}  [{status}]  {mtime}")
+    return "\n".join(lines)

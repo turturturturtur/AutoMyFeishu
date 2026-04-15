@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 
 from claude_feishu_flow.feishu.webhook import parse_webhook_event, verify_feishu_signature_v2, decrypt_feishu_message
 from claude_feishu_flow.ai.client import SubAgentResult
+from claude_feishu_flow.ai.tools import MainAgentResult
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -222,6 +223,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
     """
     chat_id: str = event.chat_id or ""
     user_text: str = event.text or ""
+    open_id: str = event.open_id or ""
 
     # Detect /edit prefix — must validate strictly before falling through
     task_id: str
@@ -297,14 +299,14 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
         )
         return
 
-    # ── Extract --retry N (only meaningful for /launch) ───────────────────
+    # ── Extract --retry N ─────────────────────────────────────────────────
     retry_match = re.search(r'\s*--retry\s+(\d+)', user_text)
     max_retries: int = int(retry_match.group(1)) if retry_match else 0
     if retry_match:
         user_text = (user_text[:retry_match.start()] + user_text[retry_match.end():]).strip()
 
     if user_text.startswith("/launch"):
-        # ── /launch: strip prefix and run the full experiment pipeline ───
+        # ── /launch Fast Path ─────────────────────────────────────────────
         launch_text = user_text[len("/launch"):].strip()
         if not launch_text:
             await svc.messaging.send_text(
@@ -315,7 +317,6 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
             if event.message_id:
                 svc.processing_ids.discard(event.message_id)
             return
-        user_text = launch_text
 
         task_id = f"exp_{uuid.uuid4()}"
         exp_dir = svc.config.resolved_experiments_dir() / task_id
@@ -323,70 +324,50 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
             (exp_dir / sub).mkdir(parents=True, exist_ok=True)
 
         logger.info(
-            "Background task started task_id=%s chat_id=%s max_retries=%d exp_dir=%s",
+            "/launch fast path: task_id=%s chat_id=%s max_retries=%d exp_dir=%s",
             task_id, chat_id, max_retries, exp_dir,
         )
 
-        async def notify(text: str) -> None:
-            try:
-                await svc.messaging.send_text(chat_id, text, reply_message_id=event.message_id)
-            except Exception as exc:
-                logger.warning("Failed to send notification: %s", exc)
+        # Download and archive images
+        images: list[dict] = []
+        if event.image_keys and event.message_id:
+            setting_dir = exp_dir / "setting"
+            for idx, img_key in enumerate(event.image_keys, start=1):
+                try:
+                    img_bytes = await svc.feishu.download_resource(
+                        message_id=event.message_id,
+                        file_key=img_key,
+                    )
+                    save_path = setting_dir / f"input_image_{idx}.jpg"
+                    save_path.write_bytes(img_bytes)
+                    b64 = base64.b64encode(img_bytes).decode("utf-8")
+                    images.append({"media_type": "image/jpeg", "base64_data": b64})
+                    logger.info("Downloaded and archived image %s → %s", img_key, save_path)
+                except Exception as exc:
+                    logger.warning("Failed to download image %s: %s", img_key, exc)
 
-        loading_msg_id = await svc.messaging.send_text(chat_id, "⏳ 正在处理中，请稍候...", reply_message_id=event.message_id)
-        try:
-            # ── Phase A: Generation ───────────────────────────────────────────
-            await notify("正在理解需求，生成实验计划和脚本，请稍候...")
-
-            # ── Image download & archive ──────────────────────────────────────
-            images: list[dict] = []
-            if event.image_keys and event.message_id:
-                setting_dir = exp_dir / "setting"
-                for idx, img_key in enumerate(event.image_keys, start=1):
-                    try:
-                        img_bytes = await svc.feishu.download_resource(
-                            message_id=event.message_id,
-                            file_key=img_key,
-                        )
-                        save_path = setting_dir / f"input_image_{idx}.jpg"
-                        save_path.write_bytes(img_bytes)
-                        b64 = base64.b64encode(img_bytes).decode("utf-8")
-                        images.append({"media_type": "image/jpeg", "base64_data": b64})
-                        logger.info("Downloaded and archived image %s → %s", img_key, save_path)
-                    except Exception as exc:
-                        logger.warning("Failed to download image %s: %s", img_key, exc)
-
-            script_path = await svc.ai.generate_experiment(
-                user_text=user_text or "(用户发送了图片，请参考图片内容生成实验脚本)",
-                workspace_dir=exp_dir,
-                images=images if images else None,
-            )
-            logger.info("Phase A complete: script_path=%s", script_path)
-
-            await _run_phase_b_and_c(
-                chat_id=chat_id,
-                task_id=task_id,
-                exp_dir=exp_dir,
-                command_text=user_text,
-                max_retries=max_retries,
-                svc=svc,
-                notify=notify,
-                reply_message_id=event.message_id,
-            )
-
-        except asyncio.TimeoutError:
-            logger.error("Task %s timed out", task_id)
-            await notify("⏰ 实验脚本执行超时，任务已终止。")
-        except Exception as exc:
-            logger.exception("Background task %s failed: %s", task_id, exc)
-            await notify(f"❌ 发生错误：{exc}")
-        finally:
-            await svc.messaging.delete_message(loading_msg_id)
-            if event.message_id:
-                svc.processing_ids.discard(event.message_id)
+        loading_msg_id = await svc.messaging.send_text(
+            chat_id, "⏳ 正在处理中，请稍候...", reply_message_id=event.message_id
+        )
+        # _run_experiment_pipeline handles its own exceptions and notifications
+        asyncio.create_task(_run_experiment_pipeline(
+            svc=svc,
+            chat_id=chat_id,
+            open_id=open_id,
+            instruction=launch_text,
+            task_id=task_id,
+            exp_dir=exp_dir,
+            is_edit_mode=False,
+            max_retries=max_retries,
+            reply_message_id=event.message_id,
+            images=images if images else None,
+        ))
+        await svc.messaging.delete_message(loading_msg_id)
+        if event.message_id:
+            svc.processing_ids.discard(event.message_id)
 
     else:
-        # ── Default: casual chat ──────────────────────────────────────────
+        # ── Default: Orchestrator Agent ───────────────────────────────────
         images: list[dict] = []
         if event.image_keys and event.message_id:
             for idx, img_key in enumerate(event.image_keys, start=1):
@@ -397,20 +378,81 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                     )
                     b64 = base64.b64encode(img_bytes).decode("utf-8")
                     images.append({"media_type": "image/jpeg", "base64_data": b64})
-                    logger.info("Downloaded image for casual chat: %s", img_key)
+                    logger.info("Downloaded image for main agent: %s", img_key)
                 except Exception as exc:
                     logger.warning("Failed to download image %s: %s", img_key, exc)
 
-        loading_msg_id = await svc.messaging.send_text(chat_id, "⏳ 正在思考中，请稍候...", reply_message_id=event.message_id)
+        exp_base_dir = svc.config.resolved_experiments_dir()
+        loading_msg_id = await svc.messaging.send_text(
+            chat_id, "⏳ 正在思考中，请稍候...", reply_message_id=event.message_id
+        )
         try:
-            reply_text = await svc.ai.chat_casual(
+            result: MainAgentResult = await svc.ai.chat_main_agent(
                 user_text=user_text or "(用户发送了图片)",
+                exp_base_dir=exp_base_dir,
                 images=images if images else None,
             )
-            await svc.messaging.send_markdown(chat_id, reply_text, reply_message_id=event.message_id)
+            if result.text:
+                await svc.messaging.send_markdown(
+                    chat_id, result.text, reply_message_id=event.message_id
+                )
+
+            if result.action_type == "launch":
+                instruction = result.action_instruction or user_text
+                task_id = f"exp_{uuid.uuid4()}"
+                exp_dir = exp_base_dir / task_id
+                for sub in ("setting", "output", "results"):
+                    (exp_dir / sub).mkdir(parents=True, exist_ok=True)
+                logger.info(
+                    "Orchestrator triggered launch: task_id=%s instruction=%r",
+                    task_id, instruction[:80],
+                )
+                asyncio.create_task(_run_experiment_pipeline(
+                    svc=svc,
+                    chat_id=chat_id,
+                    open_id=open_id,
+                    instruction=instruction,
+                    task_id=task_id,
+                    exp_dir=exp_dir,
+                    is_edit_mode=False,
+                    max_retries=max_retries,
+                    reply_message_id=event.message_id,
+                    images=images if images else None,
+                ))
+
+            elif result.action_type == "edit":
+                tid = result.action_task_id or ""
+                instruction = result.action_instruction or ""
+                exp_dir = exp_base_dir / tid
+                if not (exp_dir / "setting" / "main.py").exists():
+                    await svc.messaging.send_text(
+                        chat_id,
+                        f"实验 `{tid}` 不存在或尚未生成脚本，无法编辑。",
+                        reply_message_id=event.message_id,
+                    )
+                else:
+                    logger.info(
+                        "Orchestrator triggered edit: task_id=%s instruction=%r",
+                        tid, instruction[:80],
+                    )
+                    asyncio.create_task(_run_experiment_pipeline(
+                        svc=svc,
+                        chat_id=chat_id,
+                        open_id=open_id,
+                        instruction=instruction,
+                        task_id=tid,
+                        exp_dir=exp_dir,
+                        is_edit_mode=True,
+                        max_retries=max_retries,
+                        reply_message_id=event.message_id,
+                        images=None,
+                    ))
+
         except Exception as exc:
-            logger.exception("Casual chat failed: %s", exc)
-            await svc.messaging.send_text(chat_id, f"❌ 发生错误：{exc}", reply_message_id=event.message_id)
+            logger.exception("Main agent failed: %s", exc)
+            await svc.messaging.send_text(
+                chat_id, f"❌ 发生错误：{exc}", reply_message_id=event.message_id
+            )
         finally:
             await svc.messaging.delete_message(loading_msg_id)
             if event.message_id:
@@ -434,9 +476,67 @@ async def _handle_list(chat_id: str, svc, reply_message_id: str | None = None) -
     )
 
 
+
 # ---------------------------------------------------------------------------
 # Card action: enter Sub Agent session
 # ---------------------------------------------------------------------------
+
+async def _run_experiment_pipeline(
+    svc,  # type: ignore[no-untyped-def]
+    chat_id: str,
+    open_id: str,
+    instruction: str,
+    task_id: str,
+    exp_dir: Path,
+    is_edit_mode: bool,
+    max_retries: int,
+    reply_message_id: str | None,
+    images: list[dict] | None = None,
+) -> None:
+    """Full A+B+C pipeline for both new launches and edits.
+
+    Handles its own exceptions and notifies the user on failure, so it is safe
+    to run under asyncio.create_task without a surrounding try/except.
+    """
+    async def notify(text: str) -> None:
+        try:
+            await svc.messaging.send_text(chat_id, text, reply_message_id=reply_message_id)
+        except Exception as exc:
+            logger.warning("_run_experiment_pipeline notify failed: %s", exc)
+
+    logger.info(
+        "_run_experiment_pipeline task_id=%s is_edit=%s max_retries=%d",
+        task_id, is_edit_mode, max_retries,
+    )
+    try:
+        await notify("正在理解需求，生成实验计划和脚本，请稍候...")
+        script_path = await svc.ai.generate_experiment(
+            user_text=instruction or "(用户发送了图片，请参考图片内容生成实验脚本)",
+            workspace_dir=exp_dir,
+            is_edit_mode=is_edit_mode,
+            images=images if images else None,
+        )
+        logger.info("_run_experiment_pipeline Phase A complete: script_path=%s", script_path)
+        await _run_phase_b_and_c(
+            chat_id=chat_id,
+            task_id=task_id,
+            exp_dir=exp_dir,
+            command_text=instruction,
+            max_retries=max_retries,
+            svc=svc,
+            notify=notify,
+            reply_message_id=reply_message_id,
+        )
+    except asyncio.TimeoutError:
+        logger.error("_run_experiment_pipeline task %s timed out", task_id)
+        await notify("⏰ 实验脚本执行超时，任务已终止。")
+    except Exception as exc:
+        logger.exception("_run_experiment_pipeline task %s failed: %s", task_id, exc)
+        try:
+            await notify(f"❌ 实验流水线后台崩溃：{exc}")
+        except Exception:
+            pass
+
 
 async def _handle_enter_session(
     open_id: str,

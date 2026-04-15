@@ -27,6 +27,7 @@ from claude_feishu_flow.ai.prompt import (
     build_casual_chat_prompt,
     build_edit_chat_system_prompt,
     build_fix_system_prompt,
+    build_main_agent_prompt,
     build_sub_agent_system_prompt,
     build_system_prompt,
     build_summarize_system_prompt,
@@ -34,9 +35,12 @@ from claude_feishu_flow.ai.prompt import (
 from claude_feishu_flow.ai.tools import (
     ALL_TOOLS,
     EXECUTE_BASH_TOOL,
+    MAIN_AGENT_TOOLS,
     SUB_AGENT_TOOLS,
+    MainAgentResult,
     convert_to_openai_tools,
     handle_execute_bash,
+    handle_list_experiments,
     handle_read_log,
     handle_save_script,
 )
@@ -50,6 +54,7 @@ _KIMI_BASE_URL = "https://api.moonshot.cn/v1"
 _ALL_OAI_TOOLS = convert_to_openai_tools(ALL_TOOLS)
 _SUB_AGENT_OAI_TOOLS = convert_to_openai_tools(SUB_AGENT_TOOLS)
 _CASUAL_OAI_TOOLS = convert_to_openai_tools([EXECUTE_BASH_TOOL])
+_MAIN_AGENT_OAI_TOOLS = convert_to_openai_tools(MAIN_AGENT_TOOLS)
 
 
 async def _dispatch_tool(name: str, tool_input: dict, exp_dir: Path) -> str:
@@ -326,6 +331,147 @@ class KimiClient:
             content = response.choices[0].message.content
             return content if content else "(未返回有效回复)"
         return "(未返回有效回复)"
+
+    _MAIN_AGENT_MAX_ROUNDS = 10
+
+    async def chat_main_agent(
+        self,
+        user_text: str,
+        exp_base_dir: Path,
+        images: list[dict] | None = None,
+    ) -> MainAgentResult:
+        """Orchestrator agent (Kimi): understands natural language and triggers experiment operations.
+
+        Inline tools (executed locally, result fed back):
+          - execute_bash_command
+          - list_experiments
+
+        Blocking tools (exit loop immediately, return action):
+          - launch_experiment
+          - edit_experiment
+
+        Args:
+            user_text:     The user's raw message.
+            exp_base_dir:  Path to the experiments root directory (for list_experiments).
+            images:        Optional list of {"media_type": ..., "base64_data": ...} dicts.
+
+        Returns:
+            MainAgentResult with the model's text reply and an optional action.
+        """
+        user_content: list = []
+        if images:
+            for img in images:
+                user_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{img['media_type']};base64,{img['base64_data']}"},
+                })
+        user_content.append({"type": "text", "text": user_text})
+
+        messages: list[dict] = [
+            {"role": "system", "content": build_main_agent_prompt()},
+            {"role": "user", "content": user_content},
+        ]
+        response = None
+
+        for round_num in range(1, self._MAIN_AGENT_MAX_ROUNDS + 1):
+            logger.info("chat_main_agent (Kimi) round %d", round_num)
+            response = await self._client.chat.completions.create(
+                model=self._model,
+                max_tokens=2048,
+                messages=messages,
+                tools=_MAIN_AGENT_OAI_TOOLS,
+                tool_choice="auto",
+            )
+
+            msg = response.choices[0].message
+            finish_reason = response.choices[0].finish_reason
+            messages.append(msg.model_dump(exclude_unset=True))
+
+            if not msg.tool_calls:
+                content = msg.content
+                return MainAgentResult(text=content if content else "(未返回有效回复)")
+
+            reply_text: str = msg.content or ""
+
+            # Truncated mid-tool-call: feed error and retry
+            if finish_reason == "length" and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": (
+                            "Error: response truncated before tool input complete. "
+                            "Please retry with shorter content."
+                        ),
+                    })
+                continue
+
+            action_result: MainAgentResult | None = None
+
+            for tc in msg.tool_calls:
+                try:
+                    tool_input = json.loads(tc.function.arguments)
+                except Exception:
+                    tool_input = {}
+
+                tool_name = tc.function.name
+
+                if tool_name == "launch_experiment":
+                    action_result = MainAgentResult(
+                        text=reply_text or "好的，正在为你启动实验...",
+                        action_type="launch",
+                        action_instruction=tool_input.get("instruction", ""),
+                    )
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": "launch_experiment 已触发，系统将接管后续流程。",
+                    })
+
+                elif tool_name == "edit_experiment":
+                    action_result = MainAgentResult(
+                        text=reply_text or "好的，正在为你进入编辑流程...",
+                        action_type="edit",
+                        action_task_id=tool_input.get("task_id", ""),
+                        action_instruction=tool_input.get("instruction", ""),
+                    )
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": "edit_experiment 已触发，系统将接管后续流程。",
+                    })
+
+                elif tool_name == "execute_bash_command":
+                    try:
+                        result_text = await handle_execute_bash(tool_input, Path("."))
+                    except Exception as exc:
+                        result_text = f"工具执行失败：{exc}"
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+
+                elif tool_name == "list_experiments":
+                    try:
+                        result_text = await handle_list_experiments(exp_base_dir)
+                    except Exception as exc:
+                        result_text = f"工具执行失败：{exc}"
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+
+                else:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": f"Unknown tool: {tool_name}",
+                    })
+
+            # Blocking tool found — exit immediately
+            if action_result is not None:
+                return action_result
+            # Inline tools — continue loop
+
+        # Fallback after max rounds
+        if response is not None:
+            content = response.choices[0].message.content
+            return MainAgentResult(text=content if content else "(未返回有效回复)")
+        return MainAgentResult(text="(未返回有效回复)")
 
     async def chat_edit(
         self,
