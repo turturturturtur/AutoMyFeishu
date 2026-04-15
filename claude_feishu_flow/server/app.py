@@ -88,9 +88,11 @@ def create_app(config: Config) -> FastAPI:
 
         if config.llm_provider == "kimi":
             if not config.kimi_api_key:
-                raise ValueError("kimi_api_key must be set when llm_provider='kimi'")
+                raise ValueError("配置错误: llm_provider='kimi' 但未提供 KIMI_API_KEY")
             ai_client: Any = KimiClient(api_key=config.kimi_api_key, model=config.kimi_model)
         else:
+            if not config.anthropic_api_key:
+                raise ValueError("配置错误: llm_provider='anthropic' 但未提供 ANTHROPIC_API_KEY")
             ai_client = ClaudeClient(
                 api_key=config.anthropic_api_key,
                 model=config.anthropic_model,
