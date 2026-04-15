@@ -516,16 +516,14 @@ class ClaudeClient:
                     })
 
                 elif tool_name == "rename_experiment":
-                    action_result = MainAgentResult(
-                        text=reply_text or "好的，正在为你重命名实验...",
-                        action_type="rename",
-                        action_task_id=tool_input.get("task_id", ""),
-                        action_instruction=tool_input.get("new_alias", ""),
-                    )
+                    try:
+                        result_text = await handle_rename_experiment(tool_input, exp_base_dir)
+                    except Exception as exc:
+                        result_text = f"工具执行失败：{exc}"
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
-                        "content": "rename_experiment 已触发，系统将接管重命名流程。",
+                        "content": result_text,
                     })
 
                 elif tool_name == "execute_bash_command":

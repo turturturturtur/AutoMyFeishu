@@ -45,6 +45,7 @@ from claude_feishu_flow.ai.tools import (
     handle_list_experiments,
     handle_plot_metrics,
     handle_read_log,
+    handle_rename_experiment,
     handle_save_script,
 )
 
@@ -447,6 +448,7 @@ class KimiClient:
                         text=reply_text or "好的，正在为你启动实验...",
                         action_type="launch",
                         action_instruction=tool_input.get("instruction", ""),
+                        action_alias=tool_input.get("alias") or None,
                     )
                     messages.append({
                         "role": "tool",
@@ -506,6 +508,13 @@ class KimiClient:
                         "tool_call_id": tc.id,
                         "content": "write_document 已触发，系统将接管文稿生成流程。",
                     })
+
+                elif tool_name == "rename_experiment":
+                    try:
+                        result_text = await handle_rename_experiment(tool_input, exp_base_dir)
+                    except Exception as exc:
+                        result_text = f"工具执行失败：{exc}"
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
 
                 elif tool_name == "execute_bash_command":
                     try:
