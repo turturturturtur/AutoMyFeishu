@@ -43,7 +43,7 @@ from claude_feishu_flow.ai.tools import (
 
 logger = logging.getLogger(__name__)
 
-_MAX_ROUNDS = 12
+_MAX_ROUNDS = 30
 _KIMI_BASE_URL = "https://api.moonshot.cn/v1"
 
 # Pre-convert tool schemas once at import time
@@ -75,7 +75,7 @@ class KimiClient:
         )
     """
 
-    _SUB_AGENT_MAX_ROUNDS = 8
+    _SUB_AGENT_MAX_ROUNDS = 15
     _SUB_AGENT_HISTORY_TRIM_THRESHOLD = 60
     _SUB_AGENT_HISTORY_KEEP = 40
 

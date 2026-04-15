@@ -22,7 +22,7 @@ from claude_feishu_flow.ai.tools import ALL_TOOLS, EXECUTE_BASH_TOOL, SUB_AGENT_
 
 logger = logging.getLogger(__name__)
 
-_MAX_ROUNDS = 12  # raised to accommodate max_tokens continuation rounds
+_MAX_ROUNDS = 30  # raised to accommodate max_tokens continuation rounds
 
 
 @dataclass
@@ -560,7 +560,7 @@ class ClaudeClient:
     # Sub Agent: per-experiment conversational assistant with log reading
     # ------------------------------------------------------------------
 
-    _SUB_AGENT_MAX_ROUNDS = 8
+    _SUB_AGENT_MAX_ROUNDS = 15
     _SUB_AGENT_HISTORY_TRIM_THRESHOLD = 60
     _SUB_AGENT_HISTORY_KEEP = 40
 

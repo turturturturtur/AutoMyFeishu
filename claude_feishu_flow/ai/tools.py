@@ -207,7 +207,7 @@ async def handle_read_log(inputs: dict, experiment_dir: Path) -> str:
 
 
 async def handle_execute_bash(inputs: dict, exp_dir: Path) -> str:
-    """Execute a shell command with cwd=exp_dir and return combined stdout+stderr (truncated to 2000 chars).
+    """Execute a shell command with cwd=exp_dir and return combined stdout+stderr (truncated to last 4000 chars).
 
     Args:
         inputs:       Tool input dict from Claude (must contain 'command').
@@ -217,7 +217,7 @@ async def handle_execute_bash(inputs: dict, exp_dir: Path) -> str:
         Combined stdout+stderr output, or a timeout/error message.
     """
     command: str = inputs["command"]
-    MAX_OUTPUT = 2000
+    MAX_OUTPUT = 4000
     TIMEOUT = 30
 
     try:
@@ -242,7 +242,7 @@ async def handle_execute_bash(inputs: dict, exp_dir: Path) -> str:
         if not combined.strip():
             combined = f"[命令已执行，无输出] 退出码: {proc.returncode}"
         if len(combined) > MAX_OUTPUT:
-            combined = combined[:MAX_OUTPUT] + f"\n... [输出已截断，共 {len(combined)} 字符]"
+            combined = f"[...截断，仅显示最后 {MAX_OUTPUT} 字符...]\n" + combined[-MAX_OUTPUT:]
         logger.info("execute_bash: command=%r returncode=%s", command, proc.returncode)
         return combined
     except Exception as e:

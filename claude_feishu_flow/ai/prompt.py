@@ -99,6 +99,12 @@ def build_system_prompt() -> str:
 - main.py 必须是完整的、可以用 `python main.py` 直接运行的代码。
 - 脚本中如需输出结果，请使用 print()，不要依赖外部可视化工具。
 
+【Autonomous 效率规范】
+- 合并 Bash 命令：在配置环境时，请尽量使用 && 将多条命令合并为一步执行（例如：python -m venv venv && source venv/bin/activate && pip install torch），减少轮次消耗。
+- 区分调试与长时运行：
+  • 快速验证代码是否报错时，使用 execute_bash_command 运行少量步骤。
+  • 确认代码无误、需要长时间训练时，必须调用 restart_experiment 将任务挂起至后台，绝对不能用 execute_bash_command 跑长时间任务！
+
 【飞书排版强制规则】
 1. **绝对禁止** Markdown 表格（含 | 的语法）。展示对比数据/超参数/配置时，改用：
    - 无序列表 + 加粗键值对，例：- **学习率 (lr)**: 2e-5
@@ -158,6 +164,12 @@ def build_sub_agent_system_prompt(task_id: str, exp_dir_str: str) -> str:
 
 4. **execute_bash_command** — 在宿主机执行 Shell 命令，获取系统级信息（进程状态、GPU、依赖包、文件系统等）。
    - 如果 read_realtime_log 发现日志为空，请务必主动使用此工具运行 `ps aux | grep python` 检查进程是否存在，或者运行 `nvidia-smi` 检查显卡状态，帮助排查系统级问题。
+
+## 【Autonomous 效率规范】
+- 合并 Bash 命令：配置环境时，尽量使用 && 将多条命令合并为一步执行（例如：python -m venv venv && source venv/bin/activate && pip install torch），减少轮次消耗。
+- 区分调试与长时运行：
+  • 快速验证代码是否报错时，使用 execute_bash_command 运行少量步骤。
+  • 确认代码无误、需要长时间训练时，必须调用 restart_experiment 将任务挂起至后台，绝对不能用 execute_bash_command 跑长时间任务！
 
 ## 回答原则
 - 简洁直接，优先展示关键数据
