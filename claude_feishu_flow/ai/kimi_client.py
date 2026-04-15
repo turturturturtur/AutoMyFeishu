@@ -28,6 +28,7 @@ from claude_feishu_flow.ai.prompt import (
     build_edit_chat_system_prompt,
     build_fix_system_prompt,
     build_main_agent_prompt,
+    build_review_agent_prompt,
     build_sub_agent_system_prompt,
     build_system_prompt,
     build_summarize_system_prompt,
@@ -36,6 +37,7 @@ from claude_feishu_flow.ai.tools import (
     ALL_TOOLS,
     EXECUTE_BASH_TOOL,
     MAIN_AGENT_TOOLS,
+    SAVE_SCRIPT_TOOL,
     SUB_AGENT_TOOLS,
     MainAgentResult,
     convert_to_openai_tools,
@@ -349,6 +351,7 @@ class KimiClient:
         Blocking tools (exit loop immediately, return action):
           - launch_experiment
           - edit_experiment
+          - review_experiment
 
         Args:
             user_text:     The user's raw message.
@@ -439,6 +442,18 @@ class KimiClient:
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "content": "edit_experiment 已触发，系统将接管后续流程。",
+                    })
+
+                elif tool_name == "review_experiment":
+                    action_result = MainAgentResult(
+                        text=reply_text or "好的，正在为你启动代码审阅...",
+                        action_type="review",
+                        action_task_id=tool_input.get("task_id", ""),
+                    )
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": "review_experiment 已触发，系统将接管审阅流程。",
                     })
 
                 elif tool_name == "execute_bash_command":
@@ -664,6 +679,83 @@ class KimiClient:
             raise RuntimeError(f"Kimi did not fix main.py within {_MAX_ROUNDS} rounds.")
 
         return saved_files["main.py"]
+
+    # ------------------------------------------------------------------
+    # Review Agent: static code review for generated experiments
+    # ------------------------------------------------------------------
+
+    _REVIEW_MAX_ROUNDS = 15
+
+    async def review_experiment(self, exp_dir: Path, instruction: str) -> str:
+        """Run Review Agent on generated plan.md + main.py; may auto-fix main.py via save_script.
+
+        Args:
+            exp_dir:     Path to the experiment root (exp_<uuid>/).
+            instruction: The user's original experiment intent (used as review context).
+
+        Returns:
+            Review report text produced by the Review Agent.
+        """
+        plan_path = exp_dir / "setting" / "plan.md"
+        script_path = exp_dir / "setting" / "main.py"
+        plan_text = plan_path.read_text(encoding="utf-8") if plan_path.exists() else "(plan.md 不存在)"
+        script_text = script_path.read_text(encoding="utf-8") if script_path.exists() else "(main.py 不存在)"
+
+        system_prompt = build_review_agent_prompt()
+        user_content = (
+            f"【用户原始实验意图】\n{instruction}\n\n"
+            f"【plan.md 内容】\n```markdown\n{plan_text}\n```\n\n"
+            f"【main.py 内容】\n```python\n{script_text}\n```\n\n"
+            "请开始审阅，如有问题请直接调用 save_script 修复，最后输出审阅报告。"
+        )
+
+        _review_oai_tools = convert_to_openai_tools([SAVE_SCRIPT_TOOL])
+        messages: list[dict] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+        review_report = ""
+
+        for round_num in range(1, self._REVIEW_MAX_ROUNDS + 1):
+            logger.info("review_experiment (Kimi) round %d", round_num)
+            response = await self._client.chat.completions.create(
+                model=self._model,
+                max_tokens=4096,
+                messages=messages,
+                tools=_review_oai_tools,
+                tool_choice="auto",
+            )
+
+            msg = response.choices[0].message
+            finish_reason = response.choices[0].finish_reason
+            messages.append(msg.model_dump(exclude_unset=True))
+
+            if msg.content:
+                review_report = msg.content
+
+            if not msg.tool_calls or finish_reason not in ("tool_calls", "length"):
+                break
+
+            if finish_reason == "length" and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": "Error: response truncated. Please retry.",
+                    })
+                continue
+
+            for tc in msg.tool_calls:
+                try:
+                    tool_input = json.loads(tc.function.arguments)
+                    tool_result_str = await handle_save_script(tool_input, exp_dir)
+                    logger.info("review_experiment: save_script called, filename=%s", tool_input.get("filename"))
+                except Exception as exc:
+                    tool_result_str = f"[工具调用失败] {exc}，请检查参数后重试。"
+                    logger.warning("review_experiment (Kimi): save_script failed: %s", exc)
+                messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result_str})
+
+        return review_report or "(审阅 Agent 未返回报告)"
 
     async def chat_with_sub_agent(
         self,

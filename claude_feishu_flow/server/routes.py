@@ -258,12 +258,14 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
     Argument parsing:
       --retry N  — retry up to N times on execution failure (self-healing).
       /list      — list all experiments.
+      /review exp_<uuid> — standalone code review (no execution).
       /edit exp_<uuid> <instruction>  — start interactive edit session.
       /cancel    — cancel active edit session.
 
     Phase A (Generation) — Claude generates plan.md and main.py.
-    Phase B (Execution)  — Python runs setting/main.py, with optional self-healing loop.
-    Phase C (Reporting)  — Results written to Bitable, user notified via card.
+    Phase B (Review)     — Review Agent audits and optionally patches main.py.
+    Phase C (Execution)  — Python runs setting/main.py, with optional self-healing loop.
+    Phase D (Reporting)  — Results written to Bitable, user notified via card.
     """
     chat_id: str = event.chat_id or ""
     user_text: str = event.text or ""
@@ -289,6 +291,57 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
         if chat_id in svc.edit_sessions:
             svc.edit_sessions[chat_id].queue.put_nowait(None)  # sentinel to stop loop
         await svc.messaging.send_text(chat_id, "✅ 编辑会话已取消。", reply_message_id=event.message_id)
+        return
+
+    review_match = re.match(r'^/review\s+(exp_[0-9a-f-]+)', user_text.strip())
+    if review_match:
+        r_task_id = review_match.group(1)
+        r_exp_dir = svc.config.resolved_experiments_dir() / r_task_id
+        if not r_exp_dir.exists():
+            await svc.messaging.send_text(
+                chat_id,
+                f"❌ 实验 {r_task_id} 不存在。",
+                reply_message_id=event.message_id,
+            )
+            if event.message_id:
+                svc.processing_ids.discard(event.message_id)
+            return
+        if not (r_exp_dir / "setting" / "main.py").exists():
+            await svc.messaging.send_text(
+                chat_id,
+                f"❌ 实验 {r_task_id} 尚未生成代码，请先运行实验。",
+                reply_message_id=event.message_id,
+            )
+            if event.message_id:
+                svc.processing_ids.discard(event.message_id)
+            return
+        await svc.messaging.send_text(
+            chat_id,
+            f"🕵️ 正在对 {r_task_id} 进行代码审阅，请稍候...",
+            reply_message_id=event.message_id,
+        )
+        plan_path = r_exp_dir / "setting" / "plan.md"
+        instruction_hint = plan_path.read_text(encoding="utf-8")[:500] if plan_path.exists() else "(无原始意图描述)"
+        try:
+            review_report = await svc.ai.review_experiment(r_exp_dir, instruction_hint)
+        except Exception as exc:
+            logger.exception("review_experiment fast path failed: %s", exc)
+            await svc.messaging.send_text(
+                chat_id,
+                f"❌ 审阅失败：{exc}",
+                reply_message_id=event.message_id,
+            )
+            if event.message_id:
+                svc.processing_ids.discard(event.message_id)
+            return
+        (r_exp_dir / "setting" / "review.md").write_text(review_report, encoding="utf-8")
+        await svc.messaging.send_markdown(
+            chat_id,
+            f"**🕵️ {r_task_id} 审阅报告**\n\n{review_report}",
+            reply_message_id=event.message_id,
+        )
+        if event.message_id:
+            svc.processing_ids.discard(event.message_id)
         return
 
     if user_text.startswith("/edit"):
@@ -502,6 +555,41 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                         images=None,
                     ))
 
+            elif result.action_type == "review":
+                r_tid = result.action_task_id or ""
+                r_exp_dir = exp_base_dir / r_tid
+                if not r_exp_dir.exists() or not (r_exp_dir / "setting" / "main.py").exists():
+                    await svc.messaging.send_text(
+                        chat_id,
+                        f"❌ 实验 {r_tid} 不存在或尚未生成代码。",
+                        reply_message_id=event.message_id,
+                    )
+                else:
+                    logger.info("Orchestrator triggered review: task_id=%s", r_tid)
+                    await svc.messaging.send_text(
+                        chat_id,
+                        f"🕵️ 正在对 {r_tid} 进行代码审阅，请稍候...",
+                        reply_message_id=event.message_id,
+                    )
+                    plan_path = r_exp_dir / "setting" / "plan.md"
+                    instruction_hint = plan_path.read_text(encoding="utf-8")[:500] if plan_path.exists() else ""
+                    try:
+                        review_report = await svc.ai.review_experiment(r_exp_dir, instruction_hint)
+                    except Exception as exc:
+                        logger.exception("review_experiment orchestrator path failed: %s", exc)
+                        await svc.messaging.send_text(
+                            chat_id,
+                            f"❌ 审阅失败：{exc}",
+                            reply_message_id=event.message_id,
+                        )
+                    else:
+                        (r_exp_dir / "setting" / "review.md").write_text(review_report, encoding="utf-8")
+                        await svc.messaging.send_markdown(
+                            chat_id,
+                            f"**🕵️ {r_tid} 审阅报告**\n\n{review_report}",
+                            reply_message_id=event.message_id,
+                        )
+
         except Exception as exc:
             logger.exception("Main agent failed: %s", exc)
             await svc.messaging.send_text(
@@ -547,7 +635,7 @@ async def _run_experiment_pipeline(
     reply_message_id: str | None,
     images: list[dict] | None = None,
 ) -> None:
-    """Full A+B+C pipeline for both new launches and edits.
+    """Full A→B→C→D pipeline for both new launches and edits.
 
     Handles its own exceptions and notifies the user on failure, so it is safe
     to run under asyncio.create_task without a surrounding try/except.
@@ -571,6 +659,26 @@ async def _run_experiment_pipeline(
             images=images if images else None,
         )
         logger.info("_run_experiment_pipeline Phase A complete: script_path=%s", script_path)
+
+        # ── Phase B: Review Agent ─────────────────────────────────────────
+        logger.info("[%s] Phase B: Review Agent 开始审阅...", task_id)
+        try:
+            await svc.messaging.send_text(
+                chat_id,
+                "🕵️ 代码审阅中，正在检查实验逻辑与潜在问题...",
+                reply_message_id=reply_message_id,
+            )
+            review_report = await svc.ai.review_experiment(exp_dir, instruction or "")
+            (exp_dir / "setting" / "review.md").write_text(review_report, encoding="utf-8")
+            logger.info("[%s] Phase B complete, review.md written.", task_id)
+            await svc.messaging.send_text(
+                chat_id,
+                "🕵️ 代码审阅完成，已排除静态逻辑漏洞，准备启动执行...",
+                reply_message_id=reply_message_id,
+            )
+        except Exception as exc:
+            logger.warning("[%s] Review Agent 失败 (non-fatal, continuing): %s", task_id, exc)
+
         await _run_phase_b_and_c(
             chat_id=chat_id,
             task_id=task_id,

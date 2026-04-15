@@ -15,11 +15,12 @@ from claude_feishu_flow.ai.prompt import (
     build_edit_chat_system_prompt,
     build_fix_system_prompt,
     build_main_agent_prompt,
+    build_review_agent_prompt,
     build_sub_agent_system_prompt,
     build_system_prompt,
     build_summarize_system_prompt,
 )
-from claude_feishu_flow.ai.tools import ALL_TOOLS, EXECUTE_BASH_TOOL, MAIN_AGENT_TOOLS, SUB_AGENT_TOOLS, handle_execute_bash, handle_list_experiments, handle_read_log, handle_save_script, MainAgentResult
+from claude_feishu_flow.ai.tools import ALL_TOOLS, EXECUTE_BASH_TOOL, MAIN_AGENT_TOOLS, SAVE_SCRIPT_TOOL, SUB_AGENT_TOOLS, handle_execute_bash, handle_list_experiments, handle_read_log, handle_save_script, MainAgentResult
 
 logger = logging.getLogger(__name__)
 
@@ -434,6 +435,18 @@ class ClaudeClient:
                         "content": "edit_experiment 已触发，系统将接管后续流程。",
                     })
 
+                elif tool_name == "review_experiment":
+                    action_result = MainAgentResult(
+                        text=reply_text or "好的，正在为你启动代码审阅...",
+                        action_type="review",
+                        action_task_id=tool_input.get("task_id", ""),
+                    )
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": "review_experiment 已触发，系统将接管审阅流程。",
+                    })
+
                 elif tool_name == "execute_bash_command":
                     try:
                         result_text = await handle_execute_bash(block.input, Path("."))
@@ -699,6 +712,80 @@ class ClaudeClient:
             )
 
         return saved_files["main.py"]
+
+    # ------------------------------------------------------------------
+    # Review Agent: static code review for generated experiments
+    # ------------------------------------------------------------------
+
+    _REVIEW_MAX_ROUNDS = 15
+
+    async def review_experiment(self, exp_dir: Path, instruction: str) -> str:
+        """Run Review Agent on generated plan.md + main.py; may auto-fix main.py via save_script.
+
+        Args:
+            exp_dir:     Path to the experiment root (exp_<uuid>/).
+            instruction: The user's original experiment intent (used as review context).
+
+        Returns:
+            Review report text produced by the Review Agent.
+        """
+        plan_path = exp_dir / "setting" / "plan.md"
+        script_path = exp_dir / "setting" / "main.py"
+        plan_text = plan_path.read_text(encoding="utf-8") if plan_path.exists() else "(plan.md 不存在)"
+        script_text = script_path.read_text(encoding="utf-8") if script_path.exists() else "(main.py 不存在)"
+
+        system_prompt = build_review_agent_prompt()
+        user_content = (
+            f"【用户原始实验意图】\n{instruction}\n\n"
+            f"【plan.md 内容】\n```markdown\n{plan_text}\n```\n\n"
+            f"【main.py 内容】\n```python\n{script_text}\n```\n\n"
+            "请开始审阅，如有问题请直接调用 save_script 修复，最后输出审阅报告。"
+        )
+
+        messages: list[dict] = [{"role": "user", "content": user_content}]
+        review_report = ""
+
+        for round_num in range(1, self._REVIEW_MAX_ROUNDS + 1):
+            logger.info("review_experiment round %d", round_num)
+            response = await self._client.messages.create(
+                model=self._model,
+                max_tokens=4096,
+                system=system_prompt,
+                tools=[SAVE_SCRIPT_TOOL],
+                messages=messages,
+            )
+
+            tool_calls = [b for b in response.content if b.type == "tool_use"]
+            text_blocks = [b for b in response.content if b.type == "text"]
+
+            if text_blocks:
+                review_report = text_blocks[-1].text
+
+            if response.stop_reason == "end_turn" or not tool_calls:
+                break
+
+            if response.stop_reason == "max_tokens":
+                messages.append({"role": "assistant", "content": response.content})
+                messages.append({"role": "user", "content": "请继续。"})
+                continue
+
+            messages.append({"role": "assistant", "content": response.content})
+            tool_results: list[dict] = []
+            for tc in tool_calls:
+                try:
+                    tool_result_str = await handle_save_script(tc.input, exp_dir)
+                    logger.info("review_experiment: save_script called, filename=%s", tc.input.get("filename"))
+                except Exception as exc:
+                    tool_result_str = f"[工具调用失败] {exc}，请检查参数后重试。"
+                    logger.warning("review_experiment: save_script failed: %s", exc)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tc.id,
+                    "content": tool_result_str,
+                })
+            messages.append({"role": "user", "content": tool_results})
+
+        return review_report or "(审阅 Agent 未返回报告)"
 
     # ------------------------------------------------------------------
     # Sub Agent: per-experiment conversational assistant with log reading

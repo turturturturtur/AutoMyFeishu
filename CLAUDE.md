@@ -27,13 +27,14 @@
 - `user_sessions: dict[str, str]` — open_id → task_id（Sub Agent 会话路由）
 - `sub_agent_histories: dict[str, list]` — task_id → 对话历史（最多 60 条，裁剪至 40 条）
 
-### 三阶段 Pipeline (`server/routes.py`)
+### 四阶段 Pipeline (`server/routes.py`)
 
-收到消息后，后台任务按三阶段执行：
+收到消息后，后台任务按四阶段执行：
 
 - **Phase A（生成）**: Claude Agentic 循环调用 `save_script` 工具，生成 `setting/plan.md` 和 `setting/main.py`
-- **Phase B（执行）**: `ScriptExecutor` 异步 subprocess 运行 main.py，支持 `--retry N` 自愈循环（失败时 Claude 调试 stderr 并修复 main.py）
-- **Phase C（汇报）**: Claude 生成 `results/summary.md`，写入 Bitable，发送飞书消息卡片
+- **Phase B（审阅）**: Review Agent 读取 plan.md 和 main.py，结合用户原始意图进行静态审查；发现问题时自动调用 `save_script` 修复，并将审阅报告写入 `setting/review.md`（非阻塞：Review 失败不中断流水线）
+- **Phase C（执行）**: `ScriptExecutor` 异步 subprocess 运行 main.py，支持 `--retry N` 自愈循环（失败时 Claude 调试 stderr 并修复 main.py）
+- **Phase D（汇报）**: Claude 生成 `results/summary.md`，写入 Bitable，发送飞书消息卡片
 
 ### Session 路由逻辑 (`server/routes.py`)
 
@@ -49,6 +50,7 @@ else:
 ### 命令系统
 
 - `/list` — 列出所有实验
+- `/review exp_<uuid>` — 独立审阅已生成代码（不触发执行）
 - `/edit exp_<uuid> <指令>` — 进入交互式编辑模式
 - `/cancel` — 取消活跃的编辑会话
 - `--retry N` — 允许最多 N 次自愈重试
@@ -62,12 +64,13 @@ else:
 exp_<uuid>/
 ├── setting/
 │   ├── plan.md      ← Claude Phase A 生成
-│   └── main.py      ← Claude Phase A 生成（save_script 工具写入）
+│   ├── main.py      ← Claude Phase A 生成（save_script 工具写入）
+│   └── review.md    ← Claude Phase B 审阅报告（Review Agent 写入）
 ├── output/
 │   ├── run.log      ← subprocess stdout 实时流
 │   └── error.log    ← subprocess stderr 实时流
 └── results/
-    └── summary.md   ← Claude Phase C 分析报告
+    └── summary.md   ← Claude Phase D 分析报告
 ```
 
 # 编码规范与底线原则

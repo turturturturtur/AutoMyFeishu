@@ -9,10 +9,11 @@ Sub Agent tools (SUB_AGENT_TOOLS):
   restart_experiment   — signal the orchestrator to kill old process and restart with new code
 
 Main Agent (Orchestrator) tools (MAIN_AGENT_TOOLS):
-  execute_bash_command — run shell commands inline
-  list_experiments     — list experiment directories
-  launch_experiment    — blocking: trigger new experiment pipeline
-  edit_experiment      — blocking: trigger edit pipeline
+  execute_bash_command  — run shell commands inline
+  list_experiments      — list experiment directories
+  launch_experiment     — blocking: trigger new experiment pipeline
+  edit_experiment       — blocking: trigger edit pipeline
+  review_experiment     — blocking: trigger standalone code review (no execution)
 """
 
 from __future__ import annotations
@@ -165,11 +166,31 @@ EDIT_EXPERIMENT_TOOL: dict = {
     },
 }
 
+REVIEW_EXPERIMENT_TOOL: dict = {
+    "name": "review_experiment",
+    "description": (
+        "对已生成但尚未执行（或已执行）的实验代码进行独立审阅、Bug 排查和优化，并返回审阅报告。"
+        "当用户想单独审阅某个实验的代码质量时调用。"
+        "调用后系统触发独立审阅任务，不会启动实验执行。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "task_id": {
+                "type": "string",
+                "description": "要审阅的实验 ID，格式为 exp_<uuid>。",
+            },
+        },
+        "required": ["task_id"],
+    },
+}
+
 MAIN_AGENT_TOOLS: list[dict] = [
     EXECUTE_BASH_TOOL,
     LIST_EXPERIMENTS_TOOL,
     LAUNCH_EXPERIMENT_TOOL,
     EDIT_EXPERIMENT_TOOL,
+    REVIEW_EXPERIMENT_TOOL,
 ]
 
 
@@ -179,9 +200,9 @@ class MainAgentResult:
 
     text:               The model's conversational reply to send to the user.
                         Always present, even when an action is being taken.
-    action_type:        "launch" | "edit" | None.
+    action_type:        "launch" | "edit" | "review" | None.
                         When set, routes.py must start the corresponding pipeline.
-    action_task_id:     Populated only when action_type == "edit".
+    action_task_id:     Populated when action_type == "edit" or "review".
     action_instruction: The instruction string for launch or edit pipelines.
     """
 

@@ -240,6 +240,11 @@ class Messaging:
                 "**✏️ 修改实验 + 自动修复**\n"
                 "```\n/edit exp_<uuid> <修改指令> --retry 2\n```\n\n"
 
+                "**🕵️ 代码审阅（独立审阅，不执行）**\n"
+                "```\n/review exp_<uuid>\n```\n"
+                "对已生成的实验代码进行静态审阅，检查逻辑漏洞、OOM 风险、语法错误等，输出审阅报告。\n"
+                "<font color='grey'>不会启动实验执行。也可自然语言触发：「帮我审阅 exp_xxxxx」</font>\n\n"
+
                 "**❌ 取消编辑会话**\n"
                 "```\n/cancel\n```\n"
                 "取消当前正在进行的 /edit 多轮对话。\n\n"
