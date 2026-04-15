@@ -371,6 +371,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                 except Exception as exc:
                     logger.warning("Failed to download image %s: %s", img_key, exc)
 
+        loading_msg_id = await svc.messaging.send_text(chat_id, "⏳ 正在思考中，请稍候...")
         try:
             reply_text = await svc.ai.chat_casual(
                 user_text=user_text or "(用户发送了图片)",
@@ -381,6 +382,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
             logger.exception("Casual chat failed: %s", exc)
             await svc.messaging.send_text(chat_id, f"❌ 发生错误：{exc}")
         finally:
+            await svc.messaging.delete_message(loading_msg_id)
             if event.message_id:
                 svc.processing_ids.discard(event.message_id)
 

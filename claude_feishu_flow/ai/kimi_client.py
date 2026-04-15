@@ -33,6 +33,7 @@ from claude_feishu_flow.ai.prompt import (
 )
 from claude_feishu_flow.ai.tools import (
     ALL_TOOLS,
+    EXECUTE_BASH_TOOL,
     SUB_AGENT_TOOLS,
     convert_to_openai_tools,
     handle_execute_bash,
@@ -48,6 +49,7 @@ _KIMI_BASE_URL = "https://api.moonshot.cn/v1"
 # Pre-convert tool schemas once at import time
 _ALL_OAI_TOOLS = convert_to_openai_tools(ALL_TOOLS)
 _SUB_AGENT_OAI_TOOLS = convert_to_openai_tools(SUB_AGENT_TOOLS)
+_CASUAL_OAI_TOOLS = convert_to_openai_tools([EXECUTE_BASH_TOOL])
 
 
 async def _dispatch_tool(name: str, tool_input: dict, exp_dir: Path) -> str:
@@ -257,12 +259,14 @@ class KimiClient:
         content = response.choices[0].message.content
         return content if content else "(Kimi 未返回有效摘要)"
 
+    _CASUAL_MAX_ROUNDS = 6
+
     async def chat_casual(
         self,
         user_text: str,
         images: list[dict] | None = None,
     ) -> str:
-        """Single-turn casual chat, no tool use.
+        """Single-turn casual chat with execute_bash_command tool support.
 
         Args:
             user_text: The user's message.
@@ -280,16 +284,48 @@ class KimiClient:
                 })
         user_content.append({"type": "text", "text": user_text})
 
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            max_tokens=2048,
-            messages=[
-                {"role": "system", "content": build_casual_chat_prompt()},
-                {"role": "user", "content": user_content},
-            ],
-        )
-        content = response.choices[0].message.content
-        return content if content else "(未返回有效回复)"
+        messages: list[dict] = [
+            {"role": "system", "content": build_casual_chat_prompt()},
+            {"role": "user", "content": user_content},
+        ]
+        cwd = Path(".")
+        response = None
+
+        for round_num in range(1, self._CASUAL_MAX_ROUNDS + 1):
+            logger.info("chat_casual round %d", round_num)
+            response = await self._client.chat.completions.create(
+                model=self._model,
+                max_tokens=2048,
+                messages=messages,
+                tools=_CASUAL_OAI_TOOLS,
+                tool_choice="auto",
+            )
+
+            msg = response.choices[0].message
+            messages.append(msg.model_dump(exclude_unset=True))
+
+            if not msg.tool_calls:
+                content = msg.content
+                return content if content else "(未返回有效回复)"
+
+            # Execute tool calls and feed results back
+            for tc in msg.tool_calls:
+                try:
+                    tool_input = json.loads(tc.function.arguments)
+                    result_text = await handle_execute_bash(tool_input, cwd)
+                except Exception as exc:
+                    result_text = f"Tool execution failed: {exc}"
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": result_text,
+                })
+
+        # Fallback after max rounds
+        if response is not None:
+            content = response.choices[0].message.content
+            return content if content else "(未返回有效回复)"
+        return "(未返回有效回复)"
 
     async def chat_edit(
         self,

@@ -18,7 +18,7 @@ from claude_feishu_flow.ai.prompt import (
     build_system_prompt,
     build_summarize_system_prompt,
 )
-from claude_feishu_flow.ai.tools import ALL_TOOLS, SUB_AGENT_TOOLS, handle_execute_bash, handle_read_log, handle_save_script
+from claude_feishu_flow.ai.tools import ALL_TOOLS, EXECUTE_BASH_TOOL, SUB_AGENT_TOOLS, handle_execute_bash, handle_read_log, handle_save_script
 
 logger = logging.getLogger(__name__)
 
@@ -258,12 +258,14 @@ class ClaudeClient:
                 return block.text
         return "(Claude 未返回有效摘要)"
 
+    _CASUAL_MAX_ROUNDS = 6
+
     async def chat_casual(
         self,
         user_text: str,
         images: list[dict] | None = None,
     ) -> str:
-        """Single-turn casual chat, no tool use.
+        """Single-turn casual chat with execute_bash_command tool support.
 
         Args:
             user_text: The user's message.
@@ -285,15 +287,50 @@ class ClaudeClient:
                 })
         content.append({"type": "text", "text": user_text})
 
-        response = await self._client.messages.create(
-            model=self._model,
-            max_tokens=2048,
-            system=build_casual_chat_prompt(),
-            messages=[{"role": "user", "content": content}],
-        )
-        for block in response.content:
-            if block.type == "text":
-                return block.text
+        messages: list[dict] = [{"role": "user", "content": content}]
+        system_prompt = build_casual_chat_prompt()
+        cwd = Path(".")
+
+        for round_num in range(1, self._CASUAL_MAX_ROUNDS + 1):
+            logger.info("chat_casual round %d", round_num)
+            response = await self._client.messages.create(
+                model=self._model,
+                max_tokens=2048,
+                system=system_prompt,
+                tools=[EXECUTE_BASH_TOOL],
+                messages=messages,
+            )
+
+            messages.append({"role": "assistant", "content": response.content})
+
+            tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
+
+            if not tool_use_blocks:
+                # No tool calls — extract text and return
+                for block in response.content:
+                    if block.type == "text":
+                        return block.text
+                return "(未返回有效回复)"
+
+            # Execute tool calls and feed results back
+            tool_results = []
+            for block in tool_use_blocks:
+                try:
+                    result_text = await handle_execute_bash(block.input, cwd)
+                except Exception as exc:
+                    result_text = f"Tool execution failed: {exc}"
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result_text,
+                })
+            messages.append({"role": "user", "content": tool_results})
+
+        # Fallback: return whatever text we have after max rounds
+        if response is not None:
+            for block in response.content:
+                if block.type == "text":
+                    return block.text
         return "(未返回有效回复)"
 
     async def chat_edit(
