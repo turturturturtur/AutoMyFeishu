@@ -496,6 +496,19 @@ class ClaudeClient:
                         "content": "create_cron_job 已触发，系统将注册定时任务。",
                     })
 
+                elif tool_name == "write_document":
+                    action_result = MainAgentResult(
+                        text=reply_text or "好的，正在为你撰写文稿，请稍候...",
+                        action_type="write",
+                        action_instruction=tool_input.get("instruction", user_text),
+                        action_task_id=tool_input.get("related_task_id"),
+                    )
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": "write_document 已触发，系统将接管文稿生成流程。",
+                    })
+
                 elif tool_name == "execute_bash_command":
                     try:
                         result_text = await handle_execute_bash(block.input, Path("."))
@@ -854,6 +867,57 @@ class ClaudeClient:
             messages.append({"role": "user", "content": tool_results})
 
         return review_report or "(审阅 Agent 未返回报告)"
+
+    # ------------------------------------------------------------------
+    # Document drafting: long-form Markdown technical report
+    # ------------------------------------------------------------------
+
+    async def draft_document(
+        self,
+        instruction: str,
+        related_exp_dir: Path | None = None,
+    ) -> str:
+        """Draft a long-form Markdown document based on the instruction.
+
+        If related_exp_dir is provided, reads plan.md, review.md, and summary.md
+        from that experiment and appends them as context to the system prompt.
+
+        Args:
+            instruction:      The writing topic, requirements, and style guidance.
+            related_exp_dir:  Optional path to a related experiment directory.
+
+        Returns:
+            The generated Markdown document as a string.
+        """
+        system_prompt = (
+            "你是一个资深的 AI 研究员和技术作者。"
+            "请根据用户的要求和提供的实验数据，撰写一篇排版极其专业的 Markdown 格式技术文稿。"
+            "要求逻辑严密、学术性强。禁止使用 Markdown 表格，改用列表格式。"
+        )
+
+        if related_exp_dir is not None:
+            context_parts: list[str] = []
+            for rel_path in ["setting/plan.md", "setting/review.md", "results/summary.md"]:
+                fpath = related_exp_dir / rel_path
+                if fpath.exists():
+                    try:
+                        content = fpath.read_text(encoding="utf-8", errors="replace")
+                        context_parts.append(f"### {rel_path}\n\n{content}")
+                    except Exception as exc:
+                        logger.warning("draft_document: failed to read %s: %s", fpath, exc)
+            if context_parts:
+                system_prompt += "\n\n## 相关实验数据\n\n" + "\n\n".join(context_parts)
+
+        logger.info("draft_document: drafting document, instruction=%r, exp_dir=%s", instruction[:80], related_exp_dir)
+
+        response = await self._client.messages.create(
+            model=self._model,
+            max_tokens=8192,
+            system=system_prompt,
+            messages=[{"role": "user", "content": instruction}],
+        )
+
+        return response.content[0].text
 
     # ------------------------------------------------------------------
     # Sub Agent: per-experiment conversational assistant with log reading

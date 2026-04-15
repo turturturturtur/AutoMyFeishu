@@ -16,6 +16,7 @@ Main Agent (Orchestrator) tools (MAIN_AGENT_TOOLS):
   review_experiment        — blocking: trigger standalone code review (no execution)
   plot_experiment_metrics  — generate a matplotlib chart from run.log → results/plot.png
   create_cron_job          — blocking: register a recurring scheduled task
+  write_document           — blocking: draft a long Markdown document or technical report
 """
 
 from __future__ import annotations
@@ -241,6 +242,32 @@ CREATE_CRON_JOB_TOOL: dict = {
     },
 }
 
+WRITE_DOCUMENT_TOOL: dict = {
+    "name": "write_document",
+    "description": (
+        "根据用户意图撰写长篇 Markdown 技术文稿、论文草稿或技术报告。"
+        "当用户想写文章、写报告、写论文、写文档时调用。"
+        "如果文稿依赖某个已有实验的数据和结果，请提供 related_task_id。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "instruction": {
+                "type": "string",
+                "description": "文稿的主题、要求和写作风格说明，原样传入，不要改写或截断。",
+            },
+            "related_task_id": {
+                "type": "string",
+                "description": (
+                    "（可选）关联实验的 task_id，例如 exp_xxxxxxxx。"
+                    "提供后系统将自动读取该实验的 plan.md/review.md/summary.md 作为写作素材。"
+                ),
+            },
+        },
+        "required": ["instruction"],
+    },
+}
+
 MAIN_AGENT_TOOLS: list[dict] = [
     EXECUTE_BASH_TOOL,
     LIST_EXPERIMENTS_TOOL,
@@ -249,6 +276,7 @@ MAIN_AGENT_TOOLS: list[dict] = [
     REVIEW_EXPERIMENT_TOOL,
     PLOT_METRICS_TOOL,
     CREATE_CRON_JOB_TOOL,
+    WRITE_DOCUMENT_TOOL,
 ]
 
 
@@ -258,10 +286,11 @@ class MainAgentResult:
 
     text:               The model's conversational reply to send to the user.
                         Always present, even when an action is being taken.
-    action_type:        "launch" | "edit" | "review" | "create_cron_job" | None.
+    action_type:        "launch" | "edit" | "review" | "create_cron_job" | "write" | None.
                         When set, routes.py must start the corresponding pipeline.
-    action_task_id:     Populated when action_type == "edit" or "review".
-    action_instruction: The instruction string for launch/edit pipelines, or
+    action_task_id:     Populated when action_type == "edit", "review", or "write" with a
+                        related experiment.
+    action_instruction: The instruction string for launch/edit/write pipelines, or
                         JSON params for create_cron_job.
     plot_path:          Absolute path to results/plot.png if plot_experiment_metrics
                         ran successfully; otherwise None.

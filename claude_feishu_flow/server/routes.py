@@ -402,9 +402,37 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
     if retry_match:
         user_text = (user_text[:retry_match.start()] + user_text[retry_match.end():]).strip()
 
-    if user_text.startswith("/launch"):
-        # ── /launch Fast Path ─────────────────────────────────────────────
-        launch_text = user_text[len("/launch"):].strip()
+    if user_text.startswith("/write"):
+        # ── /write Fast Path ──────────────────────────────────────────────
+        raw = user_text[len("/write"):].strip()
+        # Extract optional exp_<uuid> anywhere in the instruction
+        task_id_match = re.search(r'(exp_[0-9a-f-]+)', raw)
+        related_task_id: str | None = task_id_match.group(1) if task_id_match else None
+        write_instruction = re.sub(r'\s*exp_[0-9a-f-]+\s*', ' ', raw).strip() if task_id_match else raw
+        if not write_instruction:
+            await svc.messaging.send_text(
+                chat_id,
+                "请在 /write 后附上文稿主题，例如：/write 撰写一篇关于Transformer的技术综述",
+                reply_message_id=event.message_id,
+            )
+            if event.message_id:
+                svc.processing_ids.discard(event.message_id)
+            return
+        logger.info("/write fast path: instruction=%r related_task_id=%s", write_instruction[:80], related_task_id)
+        asyncio.create_task(
+            _handle_write_document(
+                svc=svc,
+                chat_id=chat_id,
+                instruction=write_instruction,
+                related_task_id=related_task_id,
+                reply_message_id=event.message_id,
+            )
+        )
+        if event.message_id:
+            svc.processing_ids.discard(event.message_id)
+
+    elif user_text.startswith("/launch"):
+        # ── /launch Fast Path ─────────────────────────────────────────────        launch_text = user_text[len("/launch"):].strip()
         if not launch_text and not event.image_keys and not event.files:
             await svc.messaging.send_text(
                 chat_id,
@@ -629,6 +657,17 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                     chat_id, confirm, reply_message_id=event.message_id
                 )
 
+            elif result.action_type == "write":
+                asyncio.create_task(
+                    _handle_write_document(
+                        svc=svc,
+                        chat_id=chat_id,
+                        instruction=result.action_instruction or user_text,
+                        related_task_id=result.action_task_id,
+                        reply_message_id=event.message_id,
+                    )
+                )
+
         except Exception as exc:
             logger.exception("Main agent failed: %s", exc)
             await svc.messaging.send_text(
@@ -653,6 +692,66 @@ async def _handle_list(chat_id: str, svc, reply_message_id: str | None = None) -
         receive_id=chat_id,
         receive_id_type="chat_id",
         entries=entries,
+        reply_message_id=reply_message_id,
+    )
+
+
+async def _handle_write_document(  # type: ignore[no-untyped-def]
+    svc,
+    chat_id: str,
+    instruction: str,
+    related_task_id: str | None,
+    reply_message_id: str | None = None,
+) -> None:
+    """Draft a long-form Markdown document and send a completion card to Feishu."""
+    from datetime import datetime
+
+    # Resolve experiment directory if related_task_id provided
+    related_exp_dir: Path | None = None
+    if related_task_id:
+        candidate = svc.config.resolved_experiments_dir() / related_task_id
+        if candidate.is_dir():
+            related_exp_dir = candidate
+        else:
+            logger.warning("_handle_write_document: related exp dir not found: %s", candidate)
+
+    await svc.messaging.send_text(
+        chat_id,
+        "✍️ 正在奋笔疾书中，请稍候...",
+        reply_message_id=reply_message_id,
+    )
+
+    try:
+        document_text: str = await svc.ai.draft_document(
+            instruction=instruction,
+            related_exp_dir=related_exp_dir,
+        )
+    except Exception as exc:
+        logger.exception("draft_document failed: %s", exc)
+        await svc.messaging.send_text(
+            chat_id,
+            f"❌ 文稿生成失败：{exc}",
+        )
+        return
+
+    # Save document locally
+    if related_exp_dir is not None:
+        save_path = related_exp_dir / "results" / "draft.md"
+    else:
+        docs_dir = svc.config.resolved_experiments_dir().parent / "Docs"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_path = docs_dir / f"draft_{timestamp}.md"
+
+    save_path.write_text(document_text, encoding="utf-8")
+    logger.info("Document saved to %s (%d chars)", save_path, len(document_text))
+
+    await svc.messaging.send_document_card(
+        receive_id=chat_id,
+        receive_id_type="chat_id",
+        instruction=instruction,
+        document_text=document_text,
+        save_path=str(save_path),
         reply_message_id=reply_message_id,
     )
 

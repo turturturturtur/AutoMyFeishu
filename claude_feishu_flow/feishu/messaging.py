@@ -211,6 +211,60 @@ class Messaging:
         }
         return await self.send_card(receive_id, card, receive_id_type=receive_id_type, reply_message_id=reply_message_id)  # type: ignore[arg-type]
 
+    async def send_document_card(
+        self,
+        receive_id: str,
+        receive_id_type: str,
+        instruction: str,
+        document_text: str,
+        save_path: str,
+        reply_message_id: str | None = None,
+    ) -> str:
+        """Send a card announcing that a drafted document is ready.
+
+        Shows the writing instruction, character count, server save path, and
+        a 500-character preview of the document content.
+
+        Args:
+            receive_id:      Feishu chat_id or open_id.
+            receive_id_type: "chat_id" | "open_id" etc.
+            instruction:     The original writing instruction.
+            document_text:   The full generated Markdown document.
+            save_path:       Absolute path where the document was saved on server.
+            reply_message_id: Optional message_id to reply to.
+
+        Returns:
+            Created message_id.
+        """
+        preview = document_text[:500]
+        if len(document_text) > 500:
+            preview += "\n\n*...(内容已截断，完整文稿见服务器文件)*"
+        total_chars = len(document_text)
+
+        card = {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": "✍️ 文稿生成完毕"},
+                "template": "green",
+            },
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": (
+                        f"**📌 写作指令**\n{instruction}\n\n"
+                        f"**📄 字数统计：** 约 {total_chars} 字符\n"
+                        f"**💾 保存路径：** `{save_path}`"
+                    ),
+                },
+                {"tag": "hr"},
+                {
+                    "tag": "markdown",
+                    "content": f"**📖 内容预览（前 500 字）**\n\n{preview}",
+                },
+            ],
+        }
+        return await self.send_card(receive_id, card, receive_id_type=receive_id_type, reply_message_id=reply_message_id)  # type: ignore[arg-type]
+
     async def send_help_card(
         self,
         receive_id: str,
@@ -298,6 +352,13 @@ class Messaging:
                 "示例：`每天早上 9 点汇报所有实验进展`\n"
                 "示例：`每 2 小时检查一下是否有实验异常`\n"
                 "大管家会自动注册定时任务并在指定时间主动发送消息。\n\n"
+
+                "**📝 撰写技术文稿**\n"
+                "```\n/write <主题和要求> [exp_<uuid>]\n```\n"
+                "示例：`/write 撰写一篇关于 Transformer 架构的技术综述`\n"
+                "示例：`/write 基于实验结果写一篇技术报告 exp_19caeba9`\n"
+                "AI 将生成排版专业的 Markdown 技术文稿。可选关联已有实验，自动读取其数据作为写作素材。\n"
+                "<font color='grey'>文稿保存在服务器，也可自然语言触发：「帮我写一篇关于这次实验的技术报告」</font>\n\n"
 
                 "**🆘 帮助**\n"
                 "```\n/help\n```\n"
