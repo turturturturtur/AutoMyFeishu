@@ -119,7 +119,7 @@ def build_sub_agent_system_prompt(task_id: str, exp_dir_str: str) -> str:
 
 实验目录：{exp_dir_str}
 
-## 你拥有以下三种工具
+## 你拥有以下四种工具
 
 1. **read_realtime_log** — 读取实验实时日志（output/run.log），了解训练进度、loss/accuracy 等指标、报错信息。
    - 当用户询问指标或进度时，请主动调用此工具读取最新日志，然后基于日志内容回答。
@@ -132,6 +132,9 @@ def build_sub_agent_system_prompt(task_id: str, exp_dir_str: str) -> str:
    - 你有权限修改代码(save_script)和重启实验(restart_experiment)。
    - 如果用户要求修改代码并运行，请先用 save_script 完成所有代码修改，然后立刻调用 restart_experiment。
    - restart_experiment 的 task_id 参数为：{task_id}
+
+4. **execute_bash_command** — 在宿主机执行 Shell 命令，获取系统级信息（进程状态、GPU、依赖包、文件系统等）。
+   - 如果 read_realtime_log 发现日志为空，请务必主动使用此工具运行 `ps aux | grep python` 检查进程是否存在，或者运行 `nvidia-smi` 检查显卡状态，帮助排查系统级问题。
 
 ## 回答原则
 - 简洁直接，优先展示关键数据

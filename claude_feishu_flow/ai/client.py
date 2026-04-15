@@ -17,7 +17,7 @@ from claude_feishu_flow.ai.prompt import (
     build_system_prompt,
     build_summarize_system_prompt,
 )
-from claude_feishu_flow.ai.tools import ALL_TOOLS, SUB_AGENT_TOOLS, handle_read_log, handle_save_script
+from claude_feishu_flow.ai.tools import ALL_TOOLS, SUB_AGENT_TOOLS, handle_execute_bash, handle_read_log, handle_save_script
 
 logger = logging.getLogger(__name__)
 
@@ -583,6 +583,13 @@ class ClaudeClient:
                                 "type": "tool_result",
                                 "tool_use_id": block.id,
                                 "content": "重启信号已接收，请向用户回复确认消息。系统将在你回复后执行真正的重启。",
+                            })
+                        elif block.name == "execute_bash_command":
+                            result_text = await handle_execute_bash(block.input, exp_dir)
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": result_text,
                             })
                         else:
                             tool_results.append({

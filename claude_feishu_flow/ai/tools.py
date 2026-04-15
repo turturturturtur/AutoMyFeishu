@@ -11,6 +11,7 @@ Sub Agent tools (SUB_AGENT_TOOLS):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -86,7 +87,25 @@ RESTART_EXPERIMENT_TOOL: dict = {
     },
 }
 
-SUB_AGENT_TOOLS: list[dict] = [READ_LOG_TOOL, SAVE_SCRIPT_TOOL, RESTART_EXPERIMENT_TOOL]
+EXECUTE_BASH_TOOL: dict = {
+    "name": "execute_bash_command",
+    "description": (
+        "在宿主机执行系统终端命令并返回输出。可用于排查进程(ps aux)、检查 GPU (nvidia-smi)、"
+        "查看依赖(pip list)或检查文件是否存在(ls -la)。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "command": {
+                "type": "string",
+                "description": "要执行的 bash 命令",
+            }
+        },
+        "required": ["command"],
+    },
+}
+
+SUB_AGENT_TOOLS: list[dict] = [READ_LOG_TOOL, SAVE_SCRIPT_TOOL, RESTART_EXPERIMENT_TOOL, EXECUTE_BASH_TOOL]
 
 
 # ---------------------------------------------------------------------------
@@ -152,3 +171,46 @@ async def handle_read_log(inputs: dict, experiment_dir: Path) -> str:
     lines = text.splitlines()
     tail = lines[-n_lines:] if len(lines) > n_lines else lines
     return "\n".join(tail)
+
+
+async def handle_execute_bash(inputs: dict, exp_dir: Path) -> str:
+    """Execute a shell command with cwd=exp_dir and return combined stdout+stderr (truncated to 2000 chars).
+
+    Args:
+        inputs:       Tool input dict from Claude (must contain 'command').
+        exp_dir:      The experiment root directory (used as cwd).
+
+    Returns:
+        Combined stdout+stderr output, or a timeout/error message.
+    """
+    command: str = inputs["command"]
+    MAX_OUTPUT = 2000
+    TIMEOUT = 30
+
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(exp_dir),
+        )
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=TIMEOUT)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            return f"[超时] 命令在 {TIMEOUT}s 内未完成，已强制终止: {command}"
+
+        stdout = stdout_bytes.decode("utf-8", errors="replace")
+        stderr = stderr_bytes.decode("utf-8", errors="replace")
+        combined = stdout
+        if stderr:
+            combined = combined + ("\n" if combined else "") + "[stderr]\n" + stderr
+        if not combined.strip():
+            combined = f"[命令已执行，无输出] 退出码: {proc.returncode}"
+        if len(combined) > MAX_OUTPUT:
+            combined = combined[:MAX_OUTPUT] + f"\n... [输出已截断，共 {len(combined)} 字符]"
+        logger.info("execute_bash: command=%r returncode=%s", command, proc.returncode)
+        return combined
+    except Exception as e:
+        return f"[执行失败] {e}"
