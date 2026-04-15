@@ -105,3 +105,28 @@ class FeishuClient:
         resp = await self._http.get(url, headers=headers, params={"type": resource_type})
         resp.raise_for_status()
         return resp.content
+
+    async def upload_image(self, image_bytes: bytes) -> str:
+        """Upload PNG/JPG bytes to Feishu and return image_key.
+
+        API: POST /open-apis/im/v1/images  (multipart/form-data)
+        Returns the image_key string for use in message content.
+
+        Args:
+            image_bytes: Raw PNG or JPG file bytes.
+
+        Returns:
+            image_key string from Feishu.
+        """
+        token = await self._token_manager.get_token()
+        url = f"{self._base_url}/im/v1/images"
+        headers = {"Authorization": f"Bearer {token}"}
+        files = {"image": ("plot.png", image_bytes, "image/png")}
+        data = {"image_type": "message"}
+        logger.debug("POST upload_image to %s", url)
+        resp = await self._http.post(url, headers=headers, data=data, files=files)
+        resp.raise_for_status()
+        body: dict[str, Any] = resp.json()
+        if body.get("code") not in (0, None):
+            logger.warning("Feishu upload_image non-zero code: %s", body)
+        return body["data"]["image_key"]

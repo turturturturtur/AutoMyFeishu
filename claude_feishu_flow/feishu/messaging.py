@@ -106,6 +106,36 @@ class Messaging:
         except Exception as exc:
             logger.warning("撤回消息 %s 失败: %s", message_id, exc)
 
+    async def send_image(
+        self,
+        receive_id: str,
+        image_key: str,
+        receive_id_type: ReceiveIdType = "chat_id",
+    ) -> str:
+        """Send a Feishu image message using an already-uploaded image_key.
+
+        Args:
+            receive_id:      Feishu chat_id or open_id.
+            image_key:       The image_key returned by FeishuClient.upload_image().
+            receive_id_type: "chat_id" | "open_id" etc.
+
+        Returns:
+            Created message_id.
+        """
+        payload = {
+            "receive_id": receive_id,
+            "msg_type": "image",
+            "content": json.dumps({"image_key": image_key}),
+        }
+        data = await self._client.post(
+            _SEND_MSG_PATH,
+            payload,
+            params={"receive_id_type": receive_id_type},
+        )
+        msg_id: str = data["data"]["message_id"]
+        logger.info("send_image message_id=%s", msg_id)
+        return msg_id
+
     async def send_experiment_card(
         self,
         receive_id: str,
@@ -257,6 +287,17 @@ class Messaging:
                 "**🚪 退出 Sub Agent 会话**\n"
                 "```\n/exit\n```\n"
                 "退出 Sub Agent 模式，返回主界面。\n\n"
+
+                "**📈 成果可视化**\n"
+                "用自然语言让大管家绘制 Loss/Accuracy 曲线等图表：\n"
+                "示例：`帮我画出 exp_xxxxx 的 Loss 曲线`\n"
+                "图表会自动发送到当前对话。\n\n"
+
+                "**⏰ 定时任务**\n"
+                "用自然语言设置定时汇报或定期检查：\n"
+                "示例：`每天早上 9 点汇报所有实验进展`\n"
+                "示例：`每 2 小时检查一下是否有实验异常`\n"
+                "大管家会自动注册定时任务并在指定时间主动发送消息。\n\n"
 
                 "**🆘 帮助**\n"
                 "```\n/help\n```\n"

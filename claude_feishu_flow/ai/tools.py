@@ -9,11 +9,13 @@ Sub Agent tools (SUB_AGENT_TOOLS):
   restart_experiment   — signal the orchestrator to kill old process and restart with new code
 
 Main Agent (Orchestrator) tools (MAIN_AGENT_TOOLS):
-  execute_bash_command  — run shell commands inline
-  list_experiments      — list experiment directories
-  launch_experiment     — blocking: trigger new experiment pipeline
-  edit_experiment       — blocking: trigger edit pipeline
-  review_experiment     — blocking: trigger standalone code review (no execution)
+  execute_bash_command     — run shell commands inline
+  list_experiments         — list experiment directories with metrics
+  launch_experiment        — blocking: trigger new experiment pipeline
+  edit_experiment          — blocking: trigger edit pipeline
+  review_experiment        — blocking: trigger standalone code review (no execution)
+  plot_experiment_metrics  — generate a matplotlib chart from run.log → results/plot.png
+  create_cron_job          — blocking: register a recurring scheduled task
 """
 
 from __future__ import annotations
@@ -185,12 +187,68 @@ REVIEW_EXPERIMENT_TOOL: dict = {
     },
 }
 
+PLOT_METRICS_TOOL: dict = {
+    "name": "plot_experiment_metrics",
+    "description": (
+        "Execute a self-contained Python/matplotlib script to generate a chart from an experiment's "
+        "output/run.log and save it to results/plot.png. The system will automatically send the "
+        "generated image to the user. Use when the user asks for a loss curve, accuracy plot, or "
+        "any visual chart from training logs."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "task_id": {
+                "type": "string",
+                "description": "The experiment ID, e.g. exp_<uuid>.",
+            },
+            "python_code": {
+                "type": "string",
+                "description": (
+                    "A self-contained Python script that reads output/run.log "
+                    "(relative to the experiment root directory) and saves the chart to "
+                    "results/plot.png. Must import matplotlib and call plt.savefig('results/plot.png')."
+                ),
+            },
+        },
+        "required": ["task_id", "python_code"],
+    },
+}
+
+CREATE_CRON_JOB_TOOL: dict = {
+    "name": "create_cron_job",
+    "description": (
+        "Register a recurring scheduled task. At each scheduled time, the system will automatically "
+        "call list_experiments, summarize progress, and send a proactive message to the user. "
+        "Use when the user says '每天X点汇报' or similar scheduling requests."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "cron_expression": {
+                "type": "string",
+                "description": (
+                    "Standard 5-field cron expression in local time: 'min hour day month weekday'. "
+                    "Example: '0 9 * * *' = daily at 9am. '0 */2 * * *' = every 2 hours."
+                ),
+            },
+            "task_description": {
+                "type": "string",
+                "description": "Human-readable description of what the cron job should do, in Chinese.",
+            },
+        },
+        "required": ["cron_expression", "task_description"],
+    },
+}
+
 MAIN_AGENT_TOOLS: list[dict] = [
     EXECUTE_BASH_TOOL,
     LIST_EXPERIMENTS_TOOL,
     LAUNCH_EXPERIMENT_TOOL,
     EDIT_EXPERIMENT_TOOL,
     REVIEW_EXPERIMENT_TOOL,
+    PLOT_METRICS_TOOL,
+    CREATE_CRON_JOB_TOOL,
 ]
 
 
@@ -200,16 +258,20 @@ class MainAgentResult:
 
     text:               The model's conversational reply to send to the user.
                         Always present, even when an action is being taken.
-    action_type:        "launch" | "edit" | "review" | None.
+    action_type:        "launch" | "edit" | "review" | "create_cron_job" | None.
                         When set, routes.py must start the corresponding pipeline.
     action_task_id:     Populated when action_type == "edit" or "review".
-    action_instruction: The instruction string for launch or edit pipelines.
+    action_instruction: The instruction string for launch/edit pipelines, or
+                        JSON params for create_cron_job.
+    plot_path:          Absolute path to results/plot.png if plot_experiment_metrics
+                        ran successfully; otherwise None.
     """
 
     text: str
     action_type: str | None = None
     action_task_id: str | None = None
     action_instruction: str | None = None
+    plot_path: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -444,3 +506,55 @@ async def handle_list_experiments(exp_base_dir: Path) -> str:
         lines.append(entry)
 
     return "\n".join(lines)
+
+
+async def handle_plot_metrics(inputs: dict, exp_base_dir: Path) -> str:
+    """Execute a matplotlib script in the experiment directory and save plot.png.
+
+    The handler runs an agent-provided Python script inside the experiment's root
+    directory, then checks that results/plot.png was created.
+
+    Returns a sentinel "PLOT_READY:<abs_path>" on success, or an error string.
+
+    Args:
+        inputs:       Tool call inputs with keys "task_id" and "python_code".
+        exp_base_dir: Root directory containing all exp_<uuid> subdirectories.
+    """
+    task_id: str = inputs["task_id"]
+    code: str = inputs["python_code"]
+
+    exp_dir = exp_base_dir / task_id
+    if not exp_dir.is_dir():
+        return f"实验目录不存在: {exp_dir}"
+
+    results_dir = exp_dir / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    script_path = results_dir / "_plot_script.py"
+    script_path.write_text(code, encoding="utf-8")
+    logger.info("handle_plot_metrics: running script %s", script_path)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "python",
+            str(script_path),
+            cwd=str(exp_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=60)
+    except asyncio.TimeoutError:
+        return "绘图脚本超时（60秒），请简化脚本或减小数据量。"
+    except Exception as exc:
+        return f"绘图脚本启动失败: {exc}"
+
+    if proc.returncode != 0:
+        err = stderr_bytes.decode("utf-8", errors="replace")[:2000]
+        return f"绘图脚本运行失败 (exit {proc.returncode}):\n{err}"
+
+    plot_path = results_dir / "plot.png"
+    if not plot_path.exists():
+        return "脚本已运行但 results/plot.png 未生成，请确认脚本调用了 plt.savefig('results/plot.png')。"
+
+    logger.info("handle_plot_metrics: plot saved to %s", plot_path)
+    return f"PLOT_READY:{plot_path}"

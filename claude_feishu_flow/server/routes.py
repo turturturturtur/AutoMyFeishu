@@ -507,6 +507,16 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                     chat_id, result.text, reply_message_id=event.message_id
                 )
 
+            # Send generated plot image if the agent produced one
+            if result.plot_path:
+                try:
+                    image_bytes = Path(result.plot_path).read_bytes()
+                    image_key = await svc.feishu.upload_image(image_bytes)
+                    await svc.messaging.send_image(chat_id, image_key)
+                    logger.info("Sent plot image for %s", result.plot_path)
+                except Exception as exc:
+                    logger.warning("Failed to send plot image %s: %s", result.plot_path, exc)
+
             if result.action_type == "launch":
                 instruction = result.action_instruction or user_text
                 task_id = f"exp_{uuid.uuid4()}"
@@ -592,6 +602,32 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                             f"**🕵️ {r_tid} 审阅报告**\n\n{review_report}",
                             reply_message_id=event.message_id,
                         )
+
+            elif result.action_type == "create_cron_job":
+                import json as _json
+                params = _json.loads(result.action_instruction or "{}")
+                cron_expr = params.get("cron_expression", "")
+                task_desc = params.get("task_description", "")
+                if hasattr(svc, "scheduler") and svc.scheduler is not None:
+                    try:
+                        job_id = svc.scheduler.add_cron_job(
+                            cron_expr=cron_expr,
+                            task_description=task_desc,
+                            chat_id=chat_id,
+                        )
+                        confirm = (
+                            f"定时任务已注册 ✅\n"
+                            f"- 任务：{task_desc}\n"
+                            f"- 执行时间：{cron_expr}\n"
+                            f"- Job ID：{job_id}"
+                        )
+                    except ValueError as exc:
+                        confirm = f"定时任务注册失败：{exc}"
+                else:
+                    confirm = "⚠️ 定时任务功能尚未启用（APScheduler 未初始化）。"
+                await svc.messaging.send_markdown(
+                    chat_id, confirm, reply_message_id=event.message_id
+                )
 
         except Exception as exc:
             logger.exception("Main agent failed: %s", exc)

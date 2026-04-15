@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,7 +21,19 @@ from claude_feishu_flow.ai.prompt import (
     build_system_prompt,
     build_summarize_system_prompt,
 )
-from claude_feishu_flow.ai.tools import ALL_TOOLS, EXECUTE_BASH_TOOL, MAIN_AGENT_TOOLS, SAVE_SCRIPT_TOOL, SUB_AGENT_TOOLS, handle_execute_bash, handle_list_experiments, handle_read_log, handle_save_script, MainAgentResult
+from claude_feishu_flow.ai.tools import (
+    ALL_TOOLS,
+    EXECUTE_BASH_TOOL,
+    MAIN_AGENT_TOOLS,
+    SAVE_SCRIPT_TOOL,
+    SUB_AGENT_TOOLS,
+    MainAgentResult,
+    handle_execute_bash,
+    handle_list_experiments,
+    handle_plot_metrics,
+    handle_read_log,
+    handle_save_script,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -349,10 +362,13 @@ class ClaudeClient:
         Inline tools (executed locally, result fed back to model):
           - execute_bash_command
           - list_experiments
+          - plot_experiment_metrics
 
         Blocking tools (exit loop immediately, return action):
           - launch_experiment
           - edit_experiment
+          - review_experiment
+          - create_cron_job
 
         Args:
             user_text:     The user's raw message.
@@ -392,6 +408,7 @@ class ClaudeClient:
         messages: list[dict] = list(history)
         system_prompt = build_main_agent_prompt()
         response = None
+        _plot_path: str | None = None
 
         for round_num in range(1, self._MAIN_AGENT_MAX_ROUNDS + 1):
             logger.info("chat_main_agent round %d", round_num)
@@ -410,9 +427,9 @@ class ClaudeClient:
                 for block in response.content:
                     if block.type == "text":
                         history.append({"role": "assistant", "content": block.text})
-                        return MainAgentResult(text=block.text)
+                        return MainAgentResult(text=block.text, plot_path=_plot_path)
                 history.append({"role": "assistant", "content": "(未返回有效回复)"})
-                return MainAgentResult(text="(未返回有效回复)")
+                return MainAgentResult(text="(未返回有效回复)", plot_path=_plot_path)
 
             # Extract any partial text reply that accompanies tool calls
             reply_text = ""
@@ -464,6 +481,21 @@ class ClaudeClient:
                         "content": "review_experiment 已触发，系统将接管审阅流程。",
                     })
 
+                elif tool_name == "create_cron_job":
+                    action_result = MainAgentResult(
+                        text=reply_text or f"好的，正在为你注册定时任务：{tool_input.get('task_description', '')}",
+                        action_type="create_cron_job",
+                        action_instruction=json.dumps({
+                            "cron_expression": tool_input.get("cron_expression", ""),
+                            "task_description": tool_input.get("task_description", ""),
+                        }),
+                    )
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": "create_cron_job 已触发，系统将注册定时任务。",
+                    })
+
                 elif tool_name == "execute_bash_command":
                     try:
                         result_text = await handle_execute_bash(block.input, Path("."))
@@ -486,6 +518,22 @@ class ClaudeClient:
                         "content": result_text,
                     })
 
+                elif tool_name == "plot_experiment_metrics":
+                    try:
+                        result_str = await handle_plot_metrics(block.input, exp_base_dir)
+                    except Exception as exc:
+                        result_str = f"绘图工具执行失败：{exc}"
+                    if result_str.startswith("PLOT_READY:"):
+                        _plot_path = result_str.split(":", 1)[1]
+                        tool_result_text = "图表已成功生成并保存到 results/plot.png，将自动发送给用户。"
+                    else:
+                        tool_result_text = result_str
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": tool_result_text,
+                    })
+
                 else:
                     tool_results.append({
                         "type": "tool_result",
@@ -506,9 +554,9 @@ class ClaudeClient:
             for block in response.content:
                 if block.type == "text":
                     history.append({"role": "assistant", "content": block.text})
-                    return MainAgentResult(text=block.text)
+                    return MainAgentResult(text=block.text, plot_path=_plot_path)
         history.append({"role": "assistant", "content": "(未返回有效回复)"})
-        return MainAgentResult(text="(未返回有效回复)")
+        return MainAgentResult(text="(未返回有效回复)", plot_path=_plot_path)
 
     async def chat_edit(
         self,

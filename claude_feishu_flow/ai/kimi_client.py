@@ -43,6 +43,7 @@ from claude_feishu_flow.ai.tools import (
     convert_to_openai_tools,
     handle_execute_bash,
     handle_list_experiments,
+    handle_plot_metrics,
     handle_read_log,
     handle_save_script,
 )
@@ -348,11 +349,13 @@ class KimiClient:
         Inline tools (executed locally, result fed back):
           - execute_bash_command
           - list_experiments
+          - plot_experiment_metrics
 
         Blocking tools (exit loop immediately, return action):
           - launch_experiment
           - edit_experiment
           - review_experiment
+          - create_cron_job
 
         Args:
             user_text:     The user's raw message.
@@ -390,6 +393,7 @@ class KimiClient:
             {"role": "system", "content": build_main_agent_prompt()},
         ] + list(history)
         response = None
+        _plot_path: str | None = None
 
         for round_num in range(1, self._MAIN_AGENT_MAX_ROUNDS + 1):
             logger.info("chat_main_agent (Kimi) round %d", round_num)
@@ -409,7 +413,7 @@ class KimiClient:
                 content = msg.content
                 text = content if content else "(未返回有效回复)"
                 history.append({"role": "assistant", "content": text})
-                return MainAgentResult(text=text)
+                return MainAgentResult(text=text, plot_path=_plot_path)
 
             reply_text: str = msg.content or ""
 
@@ -473,6 +477,21 @@ class KimiClient:
                         "content": "review_experiment 已触发，系统将接管审阅流程。",
                     })
 
+                elif tool_name == "create_cron_job":
+                    action_result = MainAgentResult(
+                        text=reply_text or f"好的，正在为你注册定时任务：{tool_input.get('task_description', '')}",
+                        action_type="create_cron_job",
+                        action_instruction=json.dumps({
+                            "cron_expression": tool_input.get("cron_expression", ""),
+                            "task_description": tool_input.get("task_description", ""),
+                        }),
+                    )
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": "create_cron_job 已触发，系统将注册定时任务。",
+                    })
+
                 elif tool_name == "execute_bash_command":
                     try:
                         result_text = await handle_execute_bash(tool_input, Path("."))
@@ -486,6 +505,18 @@ class KimiClient:
                     except Exception as exc:
                         result_text = f"工具执行失败：{exc}"
                     messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+
+                elif tool_name == "plot_experiment_metrics":
+                    try:
+                        result_str = await handle_plot_metrics(tool_input, exp_base_dir)
+                    except Exception as exc:
+                        result_str = f"绘图工具执行失败：{exc}"
+                    if result_str.startswith("PLOT_READY:"):
+                        _plot_path = result_str.split(":", 1)[1]
+                        tool_result_text = "图表已成功生成并保存到 results/plot.png，将自动发送给用户。"
+                    else:
+                        tool_result_text = result_str
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result_text})
 
                 else:
                     messages.append({
@@ -505,9 +536,9 @@ class KimiClient:
             content = response.choices[0].message.content
             text = content if content else "(未返回有效回复)"
             history.append({"role": "assistant", "content": text})
-            return MainAgentResult(text=text)
+            return MainAgentResult(text=text, plot_path=_plot_path)
         history.append({"role": "assistant", "content": "(未返回有效回复)"})
-        return MainAgentResult(text="(未返回有效回复)")
+        return MainAgentResult(text="(未返回有效回复)", plot_path=_plot_path)
 
     async def chat_edit(
         self,
