@@ -153,6 +153,17 @@ class Messaging:
             "tag": "markdown",
             "content": f"**📊 实验结果分析**\n\n{result_summary}",
         }
+        element_action = {
+            "tag": "action",
+            "actions": [
+                {
+                    "tag": "button",
+                    "text": {"tag": "plain_text", "content": "💬 进入该实验专属会话"},
+                    "type": "primary",
+                    "value": {"key": "enter_session", "task_id": task_id},
+                }
+            ],
+        }
 
         card = {
             "config": {"wide_screen_mode": True},
@@ -164,6 +175,8 @@ class Messaging:
                 element_info,
                 {"tag": "hr"},
                 element_analysis,
+                {"tag": "hr"},
+                element_action,
             ],
         }
         return await self.send_card(receive_id, card, receive_id_type=receive_id_type, reply_message_id=reply_message_id)  # type: ignore[arg-type]

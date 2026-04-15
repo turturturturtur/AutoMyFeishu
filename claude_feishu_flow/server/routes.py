@@ -157,6 +157,23 @@ async def feishu_webhook(
             svc.processing_ids.discard(event.message_id)
         return JSONResponse({"code": 0, "msg": "exit_handled"})
 
+    # ── parent_id 拦截：引用回复实验卡片 → 直接路由到 Sub Agent ──────────
+    if event.parent_id and event.parent_id in svc.msg_to_task:
+        target_task_id = svc.msg_to_task[event.parent_id]
+        logger.info(
+            "parent_id=%s matched task=%s, routing to sub_agent", event.parent_id, target_task_id
+        )
+        background_tasks.add_task(
+            _handle_sub_agent_message,
+            open_id=open_id,
+            chat_id=chat_id,
+            task_id=target_task_id,
+            user_text=user_text,
+            svc=svc,
+            event_message_id=event.message_id,
+        )
+        return JSONResponse({"code": 0, "msg": "routed_by_parent_id"})
+
     # ── Sub Agent routing: if user has active session, forward there ──────
     current_session = svc.user_sessions.get(open_id, "main")
     if current_session != "main":
@@ -636,7 +653,7 @@ async def _run_phase_b_and_c(
     })
 
     plan_summary = plan_text[:_PLAN_CARD_MAX] if plan_text else "(计划文件不存在)"
-    await svc.messaging.send_experiment_card(
+    card_msg_id = await svc.messaging.send_experiment_card(
         receive_id=chat_id,
         receive_id_type="chat_id",
         task_id=task_id,
@@ -648,6 +665,8 @@ async def _run_phase_b_and_c(
         repair_count=repair_count,
         reply_message_id=reply_message_id,
     )
+    if card_msg_id:
+        svc.msg_to_task[card_msg_id] = task_id
 
 
 # ---------------------------------------------------------------------------

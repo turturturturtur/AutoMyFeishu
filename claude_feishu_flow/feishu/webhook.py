@@ -79,6 +79,7 @@ class WebhookEvent:
     text: Optional[str] = None
     message_type: Optional[str] = None  # "text" | "image" | ...
     image_keys: list = field(default_factory=list)  # image_key values for message_type == "image"
+    parent_id: Optional[str] = None   # 引用回复时，被引用的原始消息 ID
     # card.action.trigger fields (button clicks on interactive cards)
     action_tag: Optional[str] = None       # e.g. "button"
     action_value: dict = field(default_factory=dict)  # e.g. {"key": "enter_session", "task_id": "exp_xxx"}
@@ -201,6 +202,7 @@ def parse_webhook_event(raw: dict) -> WebhookEvent:
             text=text,
             message_type=message_type,
             image_keys=image_keys,
+            parent_id=message.get("parent_id"),
             raw=raw,
         )
 
