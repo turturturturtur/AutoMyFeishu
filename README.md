@@ -10,10 +10,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/your-org/claude-feishu-flow/stargazers"><img src="https://img.shields.io/github/stars/your-org/claude-feishu-flow?style=for-the-badge&color=yellow" alt="Stars"/></a>
-  <a href="https://github.com/your-org/claude-feishu-flow/network/members"><img src="https://img.shields.io/github/forks/your-org/claude-feishu-flow?style=for-the-badge&color=blue" alt="Forks"/></a>
-  <a href="https://github.com/your-org/claude-feishu-flow/issues"><img src="https://img.shields.io/github/issues/your-org/claude-feishu-flow?style=for-the-badge" alt="Issues"/></a>
-  <a href="https://github.com/your-org/claude-feishu-flow/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=for-the-badge" alt="PRs Welcome"/></a>
+  <a href="https://github.com/turturturturtur/AutoMyFeishu/stargazers"><img src="https://img.shields.io/github/stars/turturturturtur/AutoMyFeishu?style=for-the-badge&color=yellow" alt="Stars"/></a>
+  <a href="https://github.com/turturturturtur/AutoMyFeishu/network/members"><img src="https://img.shields.io/github/forks/turturturturtur/AutoMyFeishu?style=for-the-badge&color=blue" alt="Forks"/></a>
+  <a href="https://github.com/turturturturtur/AutoMyFeishu/issues"><img src="https://img.shields.io/github/issues/turturturturtur/AutoMyFeishu?style=for-the-badge" alt="Issues"/></a>
+  <a href="https://github.com/turturturturtur/AutoMyFeishu/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=for-the-badge" alt="PRs Welcome"/></a>
 </p>
 
 <p align="center">
@@ -113,7 +113,7 @@ graph LR
 ### 1 — Install
 
 ```bash
-git clone https://github.com/your-org/claude-feishu-flow.git
+git clone https://github.com/turturturturtur/AutoMyFeishu.git
 cd claude-feishu-flow
 pip install -e .
 ```
@@ -249,8 +249,8 @@ pytest
 ## Star History
 
 <p align="center">
-  <a href="https://star-history.com/#your-org/claude-feishu-flow&Date">
-    <img src="https://api.star-history.com/svg?repos=your-org/claude-feishu-flow&type=Date" alt="Star History Chart" width="600"/>
+  <a href="https://star-history.com/#turturturturtur/AutoMyFeishu&Date">
+    <img src="https://api.star-history.com/svg?repos=turturturturtur/AutoMyFeishu&type=Date" alt="Star History Chart" width="600"/>
   </a>
 </p>
 
