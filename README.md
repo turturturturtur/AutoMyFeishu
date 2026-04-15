@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="docs/assets/logo.png" alt="claude-feishu-flow logo" />
+  <img src="docs/assets/logo.png" alt="AutoMyFeishu logo" />
 </p>
 
-<h1 align="center">claude-feishu-flow</h1>
+<h1 align="center">AutoMyFeishu</h1>
 
 <p align="center">
   <strong>The First Autonomous MLOps Agent in your Feishu Workspace.</strong><br/>
@@ -31,14 +31,14 @@
 > Send one message in Feishu. Get a fully executed, reviewed, and documented experiment back.
 
 <p align="center">
-  <img src="docs/assets/demo.gif" alt="Demo — claude-feishu-flow in action" width="800"/>
+  <img src="docs/assets/demo.gif" alt="Demo — AutoMyFeishu in action" width="800"/>
 </p>
 
 ---
 
-## Why claude-feishu-flow?
+## Why AutoMyFeishu?
 
-Most AI coding tools stop at generating code. **claude-feishu-flow goes further**: it is a fully autonomous multi-agent pipeline that lives inside your Feishu workspace. You describe what you want; the system plans, writes, audits, executes, self-heals on failure, and delivers a polished report — without you ever touching a terminal.
+Most AI coding tools stop at generating code. **AutoMyFeishu goes further**: it is a fully autonomous multi-agent pipeline that lives inside your Feishu workspace. You describe what you want; the system plans, writes, audits, executes, self-heals on failure, and delivers a polished report — without you ever touching a terminal.
 
 ---
 
@@ -114,7 +114,7 @@ graph LR
 
 ```bash
 git clone https://github.com/turturturturtur/AutoMyFeishu.git
-cd claude-feishu-flow
+cd AutoMyFeishu
 pip install -e .
 ```
 
