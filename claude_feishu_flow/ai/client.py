@@ -32,6 +32,7 @@ from claude_feishu_flow.ai.tools import (
     handle_list_experiments,
     handle_plot_metrics,
     handle_read_log,
+    handle_rename_experiment,
     handle_save_script,
 )
 
@@ -453,6 +454,7 @@ class ClaudeClient:
                         text=reply_text or "好的，正在为你启动实验...",
                         action_type="launch",
                         action_instruction=tool_input.get("instruction", ""),
+                        action_alias=tool_input.get("alias") or None,
                     )
                     tool_results.append({
                         "type": "tool_result",
@@ -511,6 +513,19 @@ class ClaudeClient:
                         "type": "tool_result",
                         "tool_use_id": block.id,
                         "content": "write_document 已触发，系统将接管文稿生成流程。",
+                    })
+
+                elif tool_name == "rename_experiment":
+                    action_result = MainAgentResult(
+                        text=reply_text or "好的，正在为你重命名实验...",
+                        action_type="rename",
+                        action_task_id=tool_input.get("task_id", ""),
+                        action_instruction=tool_input.get("new_alias", ""),
+                    )
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": "rename_experiment 已触发，系统将接管重命名流程。",
                     })
 
                 elif tool_name == "execute_bash_command":

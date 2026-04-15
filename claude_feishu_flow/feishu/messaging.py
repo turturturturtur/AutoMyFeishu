@@ -148,6 +148,7 @@ class Messaging:
         duration: float,
         repair_count: int = 0,
         reply_message_id: str | None = None,
+        alias: str | None = None,
     ) -> str:
         """Send a structured experiment report card.
 
@@ -161,6 +162,7 @@ class Messaging:
             status:          "success" | "failed".
             duration:        Wall-clock execution time in seconds.
             repair_count:    Number of self-healing repair attempts made.
+            alias:           Optional human-readable name shown in card title instead of UUID.
 
         Returns:
             Created message_id.
@@ -198,7 +200,7 @@ class Messaging:
         card = {
             "config": {"wide_screen_mode": True},
             "header": {
-                "title": {"tag": "plain_text", "content": f"🧪 实验报告: {task_id}"},
+                "title": {"tag": "plain_text", "content": f"🧪 实验报告: {alias or task_id}"},
                 "template": header_template,
             },
             "elements": [
@@ -316,6 +318,11 @@ class Messaging:
                 "**📋 列出所有实验**\n"
                 "```\n/list\n```\n\n"
 
+                "**🏷️ 给实验起别名**\n"
+                "```\n/alias exp_<uuid> <别名>\n```\n"
+                "示例：`/alias exp_19caeba9 MNIST基线实验`\n"
+                "为实验设置简短易读名字，之后列表和报告卡片将显示该别名。\n\n"
+
                 "**✏️ 修改已有实验（交互式多轮对话）**\n"
                 "```\n/edit exp_<uuid> <修改指令>\n```\n"
                 "示例：`/edit exp_19caeba9 把学习率改为 1e-4`\n"
@@ -380,7 +387,7 @@ class Messaging:
         self,
         receive_id: str,
         receive_id_type: str,
-        entries: list[Path],
+        entries: list[dict],
         reply_message_id: str | None = None,
     ) -> str:
         """Send a card listing all existing experiments.
@@ -388,7 +395,8 @@ class Messaging:
         Args:
             receive_id:      Feishu chat_id or open_id.
             receive_id_type: "chat_id" | "open_id" etc.
-            entries:         Experiment directories sorted newest-first.
+            entries:         List of dicts with keys: path (Path), task_id (str),
+                             alias (str), status_icon (str). Sorted newest-first.
 
         Returns:
             Created message_id.
@@ -397,11 +405,17 @@ class Messaging:
             body_elements = [{"tag": "markdown", "content": "_(暂无实验记录)_"}]
         else:
             body_elements = []
-            for d in entries:
-                status_icon = "✅" if (d / "results" / "summary.md").exists() else "⏳"
+            for entry in entries:
+                task_id_str: str = entry["task_id"]
+                alias_str: str = entry["alias"]
+                status_icon: str = entry["status_icon"]
+                if alias_str != task_id_str:
+                    display = f"**{alias_str}**\n<font color='grey'>{task_id_str}</font>"
+                else:
+                    display = f"`{task_id_str}`"
                 body_elements.append({
                     "tag": "markdown",
-                    "content": f"{status_icon} `{d.name}`",
+                    "content": f"{status_icon} {display}",
                 })
                 body_elements.append({
                     "tag": "action",
@@ -410,7 +424,7 @@ class Messaging:
                             "tag": "button",
                             "text": {"tag": "plain_text", "content": "进入会话"},
                             "type": "primary",
-                            "value": {"key": "enter_session", "task_id": d.name},
+                            "value": {"key": "enter_session", "task_id": task_id_str},
                         }
                     ],
                 })

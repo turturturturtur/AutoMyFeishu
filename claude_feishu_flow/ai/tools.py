@@ -144,6 +144,10 @@ LAUNCH_EXPERIMENT_TOOL: dict = {
                 "type": "string",
                 "description": "用户的实验需求描述，原样传入，不要改写或截断。",
             },
+            "alias": {
+                "type": "string",
+                "description": "实验的简短易读别名，例如 'ViT_CIFAR10_baseline'。系统将用别名代替 UUID 显示。",
+            },
         },
         "required": ["instruction"],
     },
@@ -291,6 +295,29 @@ WRITE_DOCUMENT_TOOL: dict = {
     },
 }
 
+RENAME_EXPERIMENT_TOOL: dict = {
+    "name": "rename_experiment",
+    "description": (
+        "为已有实验设置或更新人类可读的别名。"
+        "当用户想给实验起名字、重命名实验时调用。"
+        "调用后系统立即更新别名，无需其他操作。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "task_id": {
+                "type": "string",
+                "description": "要重命名的实验 ID，格式为 exp_<uuid>。",
+            },
+            "new_alias": {
+                "type": "string",
+                "description": "新的人类可读别名，例如 'ResNet消融实验'。",
+            },
+        },
+        "required": ["task_id", "new_alias"],
+    },
+}
+
 MAIN_AGENT_TOOLS: list[dict] = [
     EXECUTE_BASH_TOOL,
     LIST_EXPERIMENTS_TOOL,
@@ -302,6 +329,7 @@ MAIN_AGENT_TOOLS: list[dict] = [
     LIST_CRON_JOBS_TOOL,
     CANCEL_CRON_JOB_TOOL,
     WRITE_DOCUMENT_TOOL,
+    RENAME_EXPERIMENT_TOOL,
 ]
 
 
@@ -326,6 +354,7 @@ class MainAgentResult:
     action_task_id: str | None = None
     action_instruction: str | None = None
     plot_path: str | None = None
+    action_alias: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +388,36 @@ def convert_to_openai_tools(anthropic_tools: list[dict]) -> list[dict]:
             },
         })
     return result
+
+
+# ---------------------------------------------------------------------------
+# Experiment alias helper
+# ---------------------------------------------------------------------------
+
+def get_experiment_alias(exp_dir: Path) -> str:
+    """Return the human-readable alias for an experiment, falling back to the directory name.
+
+    Reads setting/meta.json and returns the "alias" key if present and non-empty.
+    Falls back to exp_dir.name (e.g. "exp_<uuid>") if the file is absent or the
+    alias key is missing/empty.
+
+    Args:
+        exp_dir: The experiment root directory (e.g. Experiments/exp_<uuid>/).
+
+    Returns:
+        The alias string, or exp_dir.name as fallback.
+    """
+    import json as _json
+    meta_path = exp_dir / "setting" / "meta.json"
+    try:
+        if meta_path.exists():
+            data = _json.loads(meta_path.read_text(encoding="utf-8"))
+            alias = data.get("alias", "")
+            if alias and alias.strip():
+                return alias.strip()
+    except Exception:
+        pass
+    return exp_dir.name
 
 
 # ---------------------------------------------------------------------------
@@ -514,6 +573,9 @@ async def handle_list_experiments(exp_base_dir: Path) -> str:
                 pass
 
         entry = f"- {d.name}  [{status}]  {mtime}"
+        alias = get_experiment_alias(d)
+        if alias != d.name:
+            entry = f"- {alias} (ID: {d.name})  [{status}]  {mtime}"
         if purpose:
             entry += f"\n  目的: {purpose}"
 
@@ -560,6 +622,39 @@ async def handle_list_experiments(exp_base_dir: Path) -> str:
         lines.append(entry)
 
     return "\n".join(lines)
+
+
+async def handle_rename_experiment(inputs: dict, exp_base_dir: Path) -> str:
+    """Update the alias in setting/meta.json for the given experiment.
+
+    Creates meta.json if it does not exist. Merges with existing data to avoid
+    overwriting other keys.
+
+    Args:
+        inputs:       Tool input dict with keys "task_id" and "new_alias".
+        exp_base_dir: Root directory containing all exp_<uuid> subdirectories.
+
+    Returns:
+        A confirmation string, or an error message if the experiment is not found.
+    """
+    import json as _json
+    task_id: str = inputs["task_id"]
+    new_alias: str = inputs["new_alias"].strip()
+    exp_dir = exp_base_dir / task_id
+    if not exp_dir.is_dir():
+        return f"实验目录不存在: {task_id}"
+    meta_path = exp_dir / "setting" / "meta.json"
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    data: dict = {}
+    try:
+        if meta_path.exists():
+            data = _json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        data = {}
+    data["alias"] = new_alias
+    meta_path.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info("handle_rename_experiment: alias=%r task_id=%s", new_alias, task_id)
+    return f"已将 {task_id} 的别名设置为：{new_alias}"
 
 
 async def handle_plot_metrics(inputs: dict, exp_base_dir: Path) -> str:

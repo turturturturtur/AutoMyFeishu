@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 
 from claude_feishu_flow.feishu.webhook import parse_webhook_event, verify_feishu_signature_v2, decrypt_feishu_message
 from claude_feishu_flow.ai.client import SubAgentResult
-from claude_feishu_flow.ai.tools import MainAgentResult
+from claude_feishu_flow.ai.tools import MainAgentResult, get_experiment_alias, handle_rename_experiment
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -285,6 +285,27 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
             receive_id_type="chat_id",
             reply_message_id=event.message_id,
         )
+        return
+
+    alias_match = re.match(r'^/alias\s+(exp_[0-9a-f-]+)\s+(.+)$', user_text.strip())
+    if alias_match:
+        a_task_id = alias_match.group(1)
+        a_new_alias = alias_match.group(2).strip()
+        a_exp_dir = svc.config.resolved_experiments_dir() / a_task_id
+        if not a_exp_dir.is_dir():
+            await svc.messaging.send_text(
+                chat_id, f"❌ 实验 {a_task_id} 不存在。", reply_message_id=event.message_id,
+            )
+        else:
+            await handle_rename_experiment(
+                {"task_id": a_task_id, "new_alias": a_new_alias},
+                svc.config.resolved_experiments_dir(),
+            )
+            await svc.messaging.send_text(
+                chat_id, f"✅ 实验已重命名为：{a_new_alias}", reply_message_id=event.message_id,
+            )
+        if event.message_id:
+            svc.processing_ids.discard(event.message_id)
         return
 
     if user_text.strip() == "/cancel":
@@ -567,6 +588,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                     max_retries=max_retries,
                     reply_message_id=event.message_id,
                     images=images if images else None,
+                    alias=result.action_alias,
                 ))
 
             elif result.action_type == "edit":
@@ -669,6 +691,27 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                     )
                 )
 
+            elif result.action_type == "rename":
+                r_tid = result.action_task_id or ""
+                new_alias = result.action_instruction or ""
+                r_exp_dir = exp_base_dir / r_tid
+                if not r_exp_dir.is_dir():
+                    await svc.messaging.send_text(
+                        chat_id,
+                        f"❌ 实验 {r_tid} 不存在，无法重命名。",
+                        reply_message_id=event.message_id,
+                    )
+                else:
+                    await handle_rename_experiment(
+                        {"task_id": r_tid, "new_alias": new_alias},
+                        exp_base_dir,
+                    )
+                    await svc.messaging.send_text(
+                        chat_id,
+                        f"✅ 实验已重命名为：{new_alias.strip()}",
+                        reply_message_id=event.message_id,
+                    )
+
         except Exception as exc:
             logger.exception("Main agent failed: %s", exc)
             await svc.messaging.send_text(
@@ -683,11 +726,21 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
 async def _handle_list(chat_id: str, svc, reply_message_id: str | None = None) -> None:  # type: ignore[no-untyped-def]
     """List all experiment directories and send a summary card."""
     experiments_dir = svc.config.resolved_experiments_dir()
-    entries = sorted(
+    raw_entries = sorted(
         (d for d in experiments_dir.iterdir() if d.is_dir() and d.name.startswith("exp_")),
         key=lambda d: d.stat().st_mtime,
         reverse=True,
     ) if experiments_dir.exists() else []
+
+    entries = [
+        {
+            "path": d,
+            "task_id": d.name,
+            "alias": get_experiment_alias(d),
+            "status_icon": "✅" if (d / "results" / "summary.md").exists() else "⏳",
+        }
+        for d in raw_entries
+    ]
 
     await svc.messaging.send_list_card(
         receive_id=chat_id,
@@ -773,6 +826,7 @@ async def _run_experiment_pipeline(
     max_retries: int,
     reply_message_id: str | None,
     images: list[dict] | None = None,
+    alias: str | None = None,
 ) -> None:
     """Full A→B→C→D pipeline for both new launches and edits.
 
@@ -791,6 +845,17 @@ async def _run_experiment_pipeline(
     )
     try:
         await notify("正在理解需求，生成实验计划和脚本，请稍候...")
+
+        # Persist alias to meta.json if provided
+        if alias:
+            import json as _json
+            meta_path = exp_dir / "setting" / "meta.json"
+            meta_path.parent.mkdir(parents=True, exist_ok=True)
+            meta_path.write_text(
+                _json.dumps({"alias": alias}, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            logger.info("_run_experiment_pipeline: wrote alias=%r to meta.json for %s", alias, task_id)
+
         script_path = await svc.ai.generate_experiment(
             user_text=instruction or "(用户发送了图片，请参考图片内容生成实验脚本)",
             workspace_dir=exp_dir,
@@ -827,6 +892,7 @@ async def _run_experiment_pipeline(
             svc=svc,
             notify=notify,
             reply_message_id=reply_message_id,
+            alias=alias,
         )
     except asyncio.TimeoutError:
         logger.error("_run_experiment_pipeline task %s timed out", task_id)
@@ -979,6 +1045,7 @@ async def _restart_and_notify(
             duration=result.duration_seconds,
             repair_count=0,
             reply_message_id=reply_message_id,
+            alias=get_experiment_alias(exp_dir),
         )
     except asyncio.TimeoutError:
         await svc.messaging.send_text(chat_id, "⏰ 重启后的实验执行超时，任务已终止。", reply_message_id=reply_message_id)
@@ -1000,6 +1067,7 @@ async def _run_phase_b_and_c(
     svc,  # type: ignore[no-untyped-def]
     notify,  # async callable(str)
     reply_message_id: str | None = None,
+    alias: str | None = None,
 ) -> None:
     """Execute setting/main.py with optional self-healing, then run AI analysis
     and send the final experiment card.  Raises on unrecoverable errors."""
@@ -1069,6 +1137,7 @@ async def _run_phase_b_and_c(
     })
 
     plan_summary = plan_text[:_PLAN_CARD_MAX] if plan_text else "(计划文件不存在)"
+    _display_alias = alias or get_experiment_alias(exp_dir)
     card_msg_id = await svc.messaging.send_experiment_card(
         receive_id=chat_id,
         receive_id_type="chat_id",
@@ -1080,6 +1149,7 @@ async def _run_phase_b_and_c(
         duration=result.duration_seconds,
         repair_count=repair_count,
         reply_message_id=reply_message_id,
+        alias=_display_alias,
     )
     if card_msg_id:
         svc.msg_to_task[card_msg_id] = task_id
