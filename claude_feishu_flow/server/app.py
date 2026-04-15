@@ -19,8 +19,14 @@ from claude_feishu_flow.feishu.bitable import BitableClient
 from claude_feishu_flow.feishu.client import FeishuClient
 from claude_feishu_flow.feishu.messaging import Messaging
 from claude_feishu_flow.runner.executor import ScriptExecutor
+from claude_feishu_flow.server.scheduler import SchedulerManager
 
 logger = logging.getLogger(__name__)
+
+# Module-level singleton so the scheduler survives across requests without
+# requiring a reference through app.state (APScheduler must live in the same
+# event loop as the FastAPI app).
+_scheduler_mgr = SchedulerManager()
 
 
 @dataclass
@@ -55,6 +61,7 @@ class Services:
     bitable: BitableClient
     ai: Any  # ClaudeClient or KimiClient
     executor: ScriptExecutor
+    scheduler: SchedulerManager
     # In-memory dedup set: prevents re-processing Feishu retry events
     processing_ids: set[str] = field(default_factory=set)
     # Active /edit sessions keyed by chat_id
@@ -104,7 +111,7 @@ def create_app(config: Config) -> FastAPI:
             )
         executor = ScriptExecutor()
 
-        app.state.services = Services(
+        services = Services(
             config=config,
             http=http,
             token_manager=token_manager,
@@ -113,13 +120,20 @@ def create_app(config: Config) -> FastAPI:
             bitable=bitable,
             ai=ai_client,
             executor=executor,
+            scheduler=_scheduler_mgr,
         )
+        app.state.services = services
+
+        # Start the cron scheduler after Services is fully initialized
+        _scheduler_mgr.set_services(services)
+        _scheduler_mgr.start()
 
         logger.info("Startup complete.")
         yield
 
         # ── SHUTDOWN ─────────────────────────────────────────────────────────
         logger.info("Shutting down...")
+        _scheduler_mgr.shutdown()
         await token_manager.stop()
         await http.aclose()
         logger.info("Shutdown complete.")
