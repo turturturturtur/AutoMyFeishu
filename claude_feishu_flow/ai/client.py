@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional
 
 import anthropic
 
@@ -986,6 +987,7 @@ class ClaudeClient:
         exp_dir: Path,
         history: list[dict],
         user_exp_dir: Optional[Path] = None,
+        send_image_callback: Optional[Callable[[Path], Coroutine[Any, Any, str]]] = None,
     ) -> SubAgentResult:
         """Handle a single turn of Sub Agent conversation.
 
@@ -1078,6 +1080,20 @@ class ClaudeClient:
                             })
                         elif block.name == "execute_bash_command":
                             result_text = await handle_execute_bash(block.input, exp_dir)
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": result_text,
+                            })
+                        elif block.name == "send_local_image":
+                            if send_image_callback is None:
+                                result_text = "图片发送功能不可用（未注入回调）。"
+                            else:
+                                raw_path = block.input.get("image_path", "")
+                                p = Path(raw_path)
+                                if not p.is_absolute():
+                                    p = exp_dir / p
+                                result_text = await send_image_callback(p)
                             tool_results.append({
                                 "type": "tool_result",
                                 "tool_use_id": block.id,

@@ -269,7 +269,7 @@ def build_sub_agent_system_prompt(task_id: str, exp_dir_str: str, user_exp_dir: 
 
 实验目录：{exp_dir_str}
 
-## 你拥有以下四种工具
+## 你拥有以下五种工具
 
 1. **read_realtime_log** — 读取实验实时日志（output/run.log），了解训练进度、loss/accuracy 等指标、报错信息。
    - 当用户询问指标或进度时，请主动调用此工具读取最新日志，然后基于日志内容回答。
@@ -285,6 +285,10 @@ def build_sub_agent_system_prompt(task_id: str, exp_dir_str: str, user_exp_dir: 
 
 4. **execute_bash_command** — 在宿主机执行 Shell 命令，获取系统级信息（进程状态、GPU、依赖包、文件系统等）。
    - 如果 read_realtime_log 发现日志为空，请务必主动使用此工具运行 `ps aux | grep python` 检查进程是否存在，或者运行 `nvidia-smi` 检查显卡状态，帮助排查系统级问题。
+
+5. **send_local_image** — 将本地图片文件发送到飞书对话中。
+   - 参数：image_path（图片绝对路径，或相对实验目录的相对路径）。
+   - **强制规则**：如果你编写的脚本生成了任何图片文件（.png / .jpg 等），在脚本执行完毕后，必须立即调用此工具将图片发送给用户。不要告知用户"图片已生成，请自行下载"，直接发送即可。
 
 ## 【Autonomous 效率规范】
 - 合并 Bash 命令：配置环境时，尽量使用 && 将多条命令合并为一步执行（例如：python -m venv venv && source venv/bin/activate && pip install torch），减少轮次消耗。

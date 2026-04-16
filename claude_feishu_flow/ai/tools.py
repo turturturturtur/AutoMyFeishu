@@ -7,6 +7,8 @@ Sub Agent tools (SUB_AGENT_TOOLS):
   read_realtime_log    — read tail of output/run.log
   save_script          — overwrite any file under setting/ (same tool, different context)
   restart_experiment   — signal the orchestrator to kill old process and restart with new code
+  execute_bash_command — run shell commands inline
+  send_local_image     — upload a local image file and send it to the Feishu chat
 
 Main Agent (Orchestrator) tools (MAIN_AGENT_TOOLS):
   execute_bash_command     — run shell commands inline
@@ -120,7 +122,25 @@ EXECUTE_BASH_TOOL: dict = {
     },
 }
 
-SUB_AGENT_TOOLS: list[dict] = [READ_LOG_TOOL, SAVE_SCRIPT_TOOL, RESTART_EXPERIMENT_TOOL, EXECUTE_BASH_TOOL]
+SEND_LOCAL_IMAGE_TOOL: dict = {
+    "name": "send_local_image",
+    "description": (
+        "当你在本地生成了图表、曲线图（如 .png / .jpg）后，必须主动调用此工具将图片发送给飞书聊天中的用户。"
+        "不要让用户自己去服务器下载。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "image_path": {
+                "type": "string",
+                "description": "图片的本地绝对路径，或相对实验目录（exp_dir）的相对路径。",
+            }
+        },
+        "required": ["image_path"],
+    },
+}
+
+SUB_AGENT_TOOLS: list[dict] = [READ_LOG_TOOL, SAVE_SCRIPT_TOOL, RESTART_EXPERIMENT_TOOL, EXECUTE_BASH_TOOL, SEND_LOCAL_IMAGE_TOOL]
 
 
 # ---------------------------------------------------------------------------

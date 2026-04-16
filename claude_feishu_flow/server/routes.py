@@ -1135,6 +1135,16 @@ async def _handle_sub_agent_message(
 
     loading_msg_id = await svc.messaging.send_text(chat_id, "⏳ 正在处理中，请稍候...", reply_message_id=event_message_id)
     try:
+        async def _send_image_to_feishu(img_path: Path) -> str:
+            try:
+                image_bytes = img_path.read_bytes()
+                image_key = await svc.feishu.upload_image(image_bytes)
+                await svc.messaging.send_image(chat_id, image_key, reply_message_id=event_message_id)
+                return "✅ 图片已发送给用户。"
+            except Exception as exc:
+                logger.warning("send_local_image failed for task=%s: %s", task_id, exc)
+                return f"❌ 图片发送失败：{exc}"
+
         async with lock:
             result: SubAgentResult = await svc.ai.chat_with_sub_agent(
                 task_id=task_id,
@@ -1142,6 +1152,7 @@ async def _handle_sub_agent_message(
                 exp_dir=exp_dir,
                 history=history,
                 user_exp_dir=_user_exp_dir(svc, open_id),
+                send_image_callback=_send_image_to_feishu,
             )
         await svc.messaging.send_markdown(chat_id, result.text, reply_message_id=event_message_id)
         if result.needs_restart:

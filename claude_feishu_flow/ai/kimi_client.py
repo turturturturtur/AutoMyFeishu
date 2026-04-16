@@ -17,8 +17,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import openai
 
@@ -921,6 +922,7 @@ class KimiClient:
         exp_dir: Path,
         history: list[dict],
         user_exp_dir: Optional[Path] = None,
+        send_image_callback: Optional[Callable[[Path], Coroutine[Any, Any, str]]] = None,
     ) -> SubAgentResult:
         """Handle a single turn of Sub Agent conversation.
 
@@ -986,6 +988,15 @@ class KimiClient:
                         if tc.function.name == "restart_experiment":
                             needs_restart = True
                             result_text = "重启信号已接收，请向用户回复确认消息。系统将在你回复后执行真正的重启。"
+                        elif tc.function.name == "send_local_image":
+                            if send_image_callback is None:
+                                result_text = "图片发送功能不可用（未注入回调）。"
+                            else:
+                                raw_path = tool_input.get("image_path", "")
+                                p = Path(raw_path)
+                                if not p.is_absolute():
+                                    p = exp_dir / p
+                                result_text = await send_image_callback(p)
                         else:
                             result_text = await _dispatch_tool(tc.function.name, tool_input, exp_dir)
                     except Exception as tool_exc:
