@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import logging
+import typing
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Optional
 
+from dotenv import set_key as _dotenv_set_key
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
+from claude_feishu_flow.ai.client import ClaudeClient
+from claude_feishu_flow.ai.kimi_client import KimiClient
 from claude_feishu_flow.ai.tools import get_experiment_alias
 from claude_feishu_flow.ai.token_tracker import get_tracker
 from claude_feishu_flow.server.app import Services
@@ -188,3 +192,177 @@ async def get_histories(request: Request) -> dict[str, Any]:
 async def get_system_stats() -> dict[str, int]:
     """Return cumulative token usage across all AI API calls."""
     return get_tracker().get()
+
+
+# ── settings constants ────────────────────────────────────────────────────────
+
+_SENSITIVE_KEYS: frozenset[str] = frozenset({
+    "anthropic_api_key",
+    "kimi_api_key",
+    "feishu_app_secret",
+    "feishu_verification_token",
+    "feishu_encrypt_key",
+})
+
+_AI_RELOAD_KEYS: frozenset[str] = frozenset({
+    "llm_provider",
+    "anthropic_api_key",
+    "anthropic_model",
+    "anthropic_base_url",
+    "kimi_api_key",
+    "kimi_model",
+    "kimi_base_url",
+})
+
+_ENV_FILE = Path(".env")
+
+
+def _mask(value: str) -> str:
+    """Return first4...last4 for non-empty secrets.
+
+    Strings shorter than 9 chars get fully masked as '***' to avoid
+    leaking the full value through the first4/last4 pattern.
+    """
+    if not value:
+        return ""
+    if len(value) < 9:
+        return "***"
+    return f"{value[:4]}...{value[-4:]}"
+
+
+def _coerce_value(field_name: str, raw: Any, cfg: Any) -> Any:
+    """Convert a JSON value to the Config field's Python type.
+
+    Handles str, int, and Optional[str] (empty string → None).
+    """
+    hints = typing.get_type_hints(type(cfg))
+    hint = hints.get(field_name)
+    if hint is None:
+        return raw
+
+    origin = getattr(hint, "__origin__", None)
+    # Optional[str] is Union[str, None]
+    if origin is typing.Union:
+        inner_args = hint.__args__
+        if type(None) in inner_args and raw == "":
+            return None
+        non_none = [a for a in inner_args if a is not type(None)]
+        if non_none:
+            return non_none[0](raw) if raw is not None else None
+        return raw
+
+    if hint is int:
+        return int(raw)
+    if hint is str:
+        return str(raw) if raw is not None else ""
+    return raw
+
+
+def _reload_ai_client(svc: Services) -> None:
+    """Re-instantiate the AI client from current svc.config and assign atomically.
+
+    Python's GIL makes the attribute assignment atomic. In-flight requests that
+    already hold a local reference to the old svc.ai complete safely with the
+    old client. Both ClaudeClient and KimiClient are stateless between calls.
+    """
+    cfg = svc.config
+    if cfg.llm_provider == "kimi":
+        if not cfg.kimi_api_key:
+            raise HTTPException(
+                status_code=422,
+                detail="llm_provider='kimi' 需要提供 kimi_api_key",
+            )
+        new_ai: Any = KimiClient(
+            api_key=cfg.kimi_api_key,
+            model=cfg.kimi_model,
+            base_url=cfg.kimi_base_url,
+        )
+    else:
+        if not cfg.anthropic_api_key:
+            raise HTTPException(
+                status_code=422,
+                detail="llm_provider='anthropic' 需要提供 anthropic_api_key",
+            )
+        new_ai = ClaudeClient(
+            api_key=cfg.anthropic_api_key,
+            model=cfg.anthropic_model,
+            base_url=cfg.anthropic_base_url or None,
+        )
+    svc.ai = new_ai
+    logger.info(
+        "AI client hot-reloaded: provider=%s model=%s",
+        cfg.llm_provider,
+        getattr(new_ai, "_model", "?"),
+    )
+
+
+# ── settings endpoints ────────────────────────────────────────────────────────
+
+@router.get("/api/settings")
+async def get_settings(request: Request) -> dict[str, Any]:
+    """Return current Config with sensitive values masked as first4...last4."""
+    cfg = _svc(request).config
+    data: dict[str, Any] = {}
+    for field_name in cfg.model_fields:
+        raw = getattr(cfg, field_name)
+        str_val = "" if raw is None else str(raw)
+        if field_name in _SENSITIVE_KEYS:
+            data[field_name] = _mask(str_val)
+        else:
+            data[field_name] = raw
+    return data
+
+
+@router.post("/api/settings")
+async def update_settings(request: Request, payload: Dict[str, Any]) -> dict[str, str]:
+    """Accept JSON overrides, persist to .env, hot-update svc.config and AI client.
+
+    Rules:
+    - Values containing '...' are skipped (the client echoed back a masked value).
+    - Only fields declared in Config are accepted; unknown keys are ignored.
+    - AI client is re-instantiated when any _AI_RELOAD_KEYS field changes value.
+    """
+    svc = _svc(request)
+    cfg = svc.config
+    known_fields = set(cfg.model_fields.keys())
+
+    async with svc.settings_lock:
+        ai_reload_needed = False
+        errors: list[str] = []
+
+        for field_name, new_value in payload.items():
+            if field_name not in known_fields:
+                continue
+            # Skip masked values the frontend echoed back unchanged
+            if isinstance(new_value, str) and "..." in new_value:
+                continue
+
+            try:
+                coerced = _coerce_value(field_name, new_value, cfg)
+            except (ValueError, TypeError) as exc:
+                errors.append(f"{field_name}: {exc}")
+                continue
+
+            current_value = getattr(cfg, field_name)
+            if coerced == current_value:
+                continue
+
+            # Persist to .env (dotenv uses uppercase key names)
+            env_key = field_name.upper()
+            dotenv_value = "" if coerced is None else str(coerced)
+            _dotenv_set_key(_ENV_FILE, env_key, dotenv_value, quote_mode="always")
+
+            # Mutate in-memory config (bypass pydantic's __setattr__ validator)
+            object.__setattr__(cfg, field_name, coerced)
+            logger.info("Config updated: %s = %r", field_name, coerced if field_name not in _SENSITIVE_KEYS else "***")
+
+            if field_name in _AI_RELOAD_KEYS:
+                ai_reload_needed = True
+
+        if errors:
+            raise HTTPException(status_code=422, detail="; ".join(errors))
+
+    if ai_reload_needed:
+        _reload_ai_client(svc)
+
+    return {"status": "ok"}

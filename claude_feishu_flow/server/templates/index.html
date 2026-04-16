@@ -244,6 +244,113 @@
       </div>
     </section>
 
+    <!-- ══ Tab 4: 系统设置 ═══════════════════════════════════════════════ -->
+    <section v-if="activeTab === 'settings'">
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="text-lg font-semibold text-gray-200">系统设置</h2>
+        <button @click="loadSettings"
+                :disabled="settingsLoading"
+                class="text-xs px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors disabled:opacity-50">
+          {{ settingsLoading ? '加载中...' : '重新加载' }}
+        </button>
+      </div>
+
+      <div class="max-w-2xl space-y-6">
+
+        <!-- LLM Provider -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 space-y-4">
+          <h3 class="text-sm font-semibold text-indigo-300 uppercase tracking-wider">LLM 提供商</h3>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Provider</label>
+            <select v-model="settings.llm_provider"
+                    class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+              <option value="anthropic">Anthropic (Claude)</option>
+              <option value="kimi">Kimi (Moonshot AI)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Anthropic Settings -->
+        <div v-if="settings.llm_provider === 'anthropic'"
+             class="bg-gray-900 border border-gray-800 rounded-lg p-5 space-y-4">
+          <h3 class="text-sm font-semibold text-indigo-300 uppercase tracking-wider">Anthropic / Claude</h3>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">
+              API Key
+              <span class="text-gray-600 font-normal ml-1">(留空则不更新)</span>
+            </label>
+            <input v-model="settings.anthropic_api_key" type="password"
+                   placeholder="sk-ant-..."
+                   class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono" />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Model</label>
+            <input v-model="settings.anthropic_model" type="text"
+                   placeholder="claude-3-5-sonnet-latest"
+                   class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono" />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">
+              Base URL
+              <span class="text-gray-600 font-normal ml-1">(可选，留空使用官方 API)</span>
+            </label>
+            <input v-model="settings.anthropic_base_url" type="text"
+                   placeholder="https://your-proxy.example.com/v1"
+                   class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono" />
+          </div>
+        </div>
+
+        <!-- Kimi Settings -->
+        <div v-if="settings.llm_provider === 'kimi'"
+             class="bg-gray-900 border border-gray-800 rounded-lg p-5 space-y-4">
+          <h3 class="text-sm font-semibold text-teal-300 uppercase tracking-wider">Kimi / Moonshot AI</h3>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">
+              API Key
+              <span class="text-gray-600 font-normal ml-1">(留空则不更新)</span>
+            </label>
+            <input v-model="settings.kimi_api_key" type="password"
+                   placeholder="sk-..."
+                   class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono" />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Model</label>
+            <input v-model="settings.kimi_model" type="text"
+                   placeholder="moonshot-v1-32k"
+                   class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono" />
+          </div>
+        </div>
+
+        <!-- General Settings -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 space-y-4">
+          <h3 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">通用设置</h3>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">
+              默认最大重试次数
+              <span class="text-gray-600 font-normal ml-1">(default_max_retries)</span>
+            </label>
+            <input v-model.number="settings.default_max_retries" type="number" min="0" max="20"
+                   class="w-32 bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+          </div>
+        </div>
+
+        <!-- Save Button + Feedback -->
+        <div class="flex items-center gap-4">
+          <button @click="saveSettings"
+                  :disabled="settingsSaving"
+                  class="px-5 py-2 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors disabled:opacity-50">
+            {{ settingsSaving ? '保存中...' : '保存设置' }}
+          </button>
+          <span v-if="settingsMsg"
+                :class="settingsMsg.startsWith('保存成功') ? 'text-green-400' : 'text-red-400'"
+                class="text-sm">
+            {{ settingsMsg }}
+          </span>
+        </div>
+
+      </div>
+    </section>
+
   </main>
 </div>
 
@@ -258,6 +365,7 @@ createApp({
       { id: 'dashboard', label: '实验大盘' },
       { id: 'logs',      label: '实时日志监控' },
       { id: 'history',   label: 'AI 交互追踪' },
+      { id: 'settings',  label: '⚙️ 系统设置' },
     ];
 
     const toast = ref('');
@@ -276,6 +384,20 @@ createApp({
     const errLogBox = ref(null);
     const mainChatBox = ref(null);
     const subChatBox = ref(null);
+
+    // ── settings state ────────────────────────────────────────────────────
+    const settings = ref({
+      llm_provider: 'anthropic',
+      anthropic_api_key: '',
+      anthropic_model: 'claude-3-5-sonnet-latest',
+      anthropic_base_url: '',
+      kimi_api_key: '',
+      kimi_model: 'moonshot-v1-32k',
+      default_max_retries: 5,
+    });
+    const settingsLoading = ref(false);
+    const settingsSaving = ref(false);
+    const settingsMsg = ref('');
 
     // ── computed ─────────────────────────────────────────────────────────
     const mainChatIds = computed(() => Object.keys(histories.value.main_agent));
@@ -377,6 +499,59 @@ createApp({
       activeTab.value = 'logs';
     }
 
+    // ── settings functions ────────────────────────────────────────────────
+    async function loadSettings() {
+      settingsLoading.value = true;
+      settingsMsg.value = '';
+      try {
+        const res = await fetch('/api/settings');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const formFields = [
+          'llm_provider', 'anthropic_api_key', 'anthropic_model',
+          'anthropic_base_url', 'kimi_api_key', 'kimi_model', 'default_max_retries',
+        ];
+        for (const key of formFields) {
+          if (data[key] !== undefined) {
+            settings.value[key] = data[key] ?? '';
+          }
+        }
+      } catch (e) {
+        settingsMsg.value = `加载失败: ${e.message}`;
+      } finally {
+        settingsLoading.value = false;
+      }
+    }
+
+    async function saveSettings() {
+      settingsSaving.value = true;
+      settingsMsg.value = '';
+      try {
+        const res = await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            llm_provider:        settings.value.llm_provider,
+            anthropic_api_key:   settings.value.anthropic_api_key,
+            anthropic_model:     settings.value.anthropic_model,
+            anthropic_base_url:  settings.value.anthropic_base_url || null,
+            kimi_api_key:        settings.value.kimi_api_key,
+            kimi_model:          settings.value.kimi_model,
+            default_max_retries: Number(settings.value.default_max_retries),
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        settingsMsg.value = '保存成功 ✓';
+      } catch (e) {
+        settingsMsg.value = `保存失败: ${e.message}`;
+      } finally {
+        settingsSaving.value = false;
+      }
+    }
+
     // ── watchers ──────────────────────────────────────────────────────────
     watch(selectedLogExp, () => { fetchLogs(); });
 
@@ -386,6 +561,10 @@ createApp({
 
     watch(subMessages, async () => {
       await scrollToBottom(subChatBox.value);
+    });
+
+    watch(activeTab, (tab) => {
+      if (tab === 'settings') loadSettings();
     });
 
     // ── polling intervals ─────────────────────────────────────────────────
@@ -431,6 +610,8 @@ createApp({
       mainChatIds, subTaskIds, mainMessages, subMessages,
       runLogBox, errLogBox, mainChatBox, subChatBox,
       statusBadge, fmtTime, openLogs,
+      settings, settingsLoading, settingsSaving, settingsMsg,
+      loadSettings, saveSettings,
     };
   }
 }).mount('#app');

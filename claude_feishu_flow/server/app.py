@@ -78,6 +78,8 @@ class Services:
     msg_to_task: dict[str, str] = field(default_factory=dict)
     # Main Agent (Orchestrator) conversation histories: maps chat_id → list of message dicts
     main_agent_histories: dict[str, list[dict]] = field(default_factory=dict)
+    # Serialises concurrent /api/settings writes
+    settings_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 def create_app(config: Config) -> FastAPI:
@@ -123,6 +125,7 @@ def create_app(config: Config) -> FastAPI:
             ai=ai_client,
             executor=executor,
             scheduler=_scheduler_mgr,
+            settings_lock=asyncio.Lock(),
         )
         app.state.services = services
 
