@@ -1011,10 +1011,28 @@ async def _run_experiment_pipeline(
         # ── Seed from Storage repo (if base_repo was specified) ───────────────
         if base_repo:
             import shutil as _shutil
+            # Hard guardrail: if the model passed an absolute path directly,
+            # auto-import it into the user's private Storage first, then
+            # normalise base_repo to the relative repo name.
             if base_repo.startswith("/"):
-                storage_repo_src = Path(base_repo)
-            else:
-                storage_repo_src = svc.config.resolved_storage_dir() / open_id / base_repo
+                source_path = Path(base_repo)
+                repo_name = source_path.name
+                storage_repo_dir = svc.config.resolved_storage_dir() / open_id / repo_name
+                if not storage_repo_dir.exists():
+                    _shutil.copytree(
+                        str(source_path),
+                        str(storage_repo_dir),
+                        symlinks=True,
+                        dirs_exist_ok=True,
+                    )
+                    logger.info(
+                        "[%s] Auto-imported absolute path '%s' into Storage for %s",
+                        task_id, base_repo, open_id,
+                    )
+                base_repo = repo_name
+
+            # base_repo is now guaranteed to be a relative Storage repo name
+            storage_repo_src = svc.config.resolved_storage_dir() / open_id / base_repo
             if storage_repo_src.is_dir():
                 _shutil.copytree(
                     str(storage_repo_src),
@@ -1032,7 +1050,7 @@ async def _run_experiment_pipeline(
                     "[%s] base_repo '%s' not found at %s, proceeding with empty exp_dir",
                     task_id, base_repo, storage_repo_src,
                 )
-                await notify(f"⚠️ 未找到仓库 '{base_repo}'，将创建空白实验目录。")
+                await notify(f"⚠️ Storage 中未找到仓库 '{base_repo}'，将创建空白实验目录。")
 
         # ── Read / initialise meta.json ───────────────────────────────────────
         import json as _json
