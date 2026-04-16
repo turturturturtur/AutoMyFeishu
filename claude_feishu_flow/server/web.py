@@ -105,7 +105,7 @@ def _sanitize_history(history: list[dict]) -> list[dict[str, str]]:
 
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def dashboard(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="index.html")
 
 
 # ── REST API ─────────────────────────────────────────────────────────────────
