@@ -577,7 +577,8 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
             svc.processing_ids.discard(event.message_id)
 
     elif user_text.startswith("/launch"):
-        # ── /launch Fast Path ─────────────────────────────────────────────        launch_text = user_text[len("/launch"):].strip()
+        # ── /launch Fast Path ─────────────────────────────────────────────
+        launch_text = user_text[len("/launch"):].strip()
         if not launch_text and not event.image_keys and not event.files:
             await svc.messaging.send_text(
                 chat_id,
