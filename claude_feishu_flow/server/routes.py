@@ -54,6 +54,31 @@ def _resolve_exp_dir(svc, open_id: str, task_id: str) -> Path | None:  # type: i
     return legacy if legacy.is_dir() else None
 
 
+def _user_config_path(svc, open_id: str) -> Path:  # type: ignore[no-untyped-def]
+    """Return the path to the per-user config file."""
+    return _user_exp_dir(svc, open_id) / "user_config.json"
+
+
+def _load_user_config(svc, open_id: str) -> dict:  # type: ignore[no-untyped-def]
+    """Load user config dict from disk, returning {} if not found."""
+    import json as _j
+    p = _user_config_path(svc, open_id)
+    if p.exists():
+        try:
+            return _j.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_user_config(svc, open_id: str, data: dict) -> None:  # type: ignore[no-untyped-def]
+    """Persist user config dict to disk."""
+    import json as _j
+    p = _user_config_path(svc, open_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(_j.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def _clean_at_mentions(text: str, mention_keys: list[str]) -> str:
     """Strip Feishu @mention placeholder keys from message text.
 
@@ -372,6 +397,27 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
         if chat_id in svc.edit_sessions:
             svc.edit_sessions[chat_id].queue.put_nowait(None)  # sentinel to stop loop
         await svc.messaging.send_text(chat_id, "✅ 编辑会话已取消。", reply_message_id=event.message_id)
+        return
+
+    if user_text.startswith("/bind"):
+        bind_token = user_text[len("/bind"):].strip()
+        if not bind_token:
+            await svc.messaging.send_text(
+                chat_id,
+                "❌ 请提供多维表格 App Token，例如：/bind bascXXXXXXXXXXXXXX",
+                reply_message_id=event.message_id,
+            )
+        else:
+            _save_user_config(svc, open_id, {"bitable_app_token": bind_token})
+            await svc.messaging.send_text(
+                chat_id,
+                "✅ 绑定成功！您的专属多维表格已配置。\n\n"
+                "⚠️ 请确认已将本机器人添加为多维表格的协作者（可编辑权限），否则实验数据将无法写入。\n\n"
+                "现在可以使用 /launch <指令> 发起实验了。",
+                reply_message_id=event.message_id,
+            )
+        if event.message_id:
+            svc.processing_ids.discard(event.message_id)
         return
 
     review_match = re.match(r'^/review\s+(exp_[0-9a-f-]+)', user_text.strip())
@@ -914,17 +960,56 @@ async def _run_experiment_pipeline(
         task_id, is_edit_mode, max_retries,
     )
     try:
+        # ── Binding check ─────────────────────────────────────────────────────
+        user_cfg = _load_user_config(svc, open_id) if open_id else {}
+        bitable_app_token: str = user_cfg.get("bitable_app_token", "")
+        if not bitable_app_token:
+            await notify(
+                "❌ 您尚未绑定多维表格。\n\n"
+                "请先在飞书创建一个空白的多维表格，将机器人添加为协作者（可编辑权限），\n"
+                "然后使用 /bind <您的多维表格AppToken> 进行绑定，再启动实验。"
+            )
+            return
+
         await notify("正在理解需求，生成实验计划和脚本，请稍候...")
 
-        # Persist alias to meta.json if provided
+        # ── Read / initialise meta.json ───────────────────────────────────────
+        import json as _json
+        meta_path = exp_dir / "setting" / "meta.json"
+        meta: dict = {}
+        if meta_path.exists():
+            try:
+                meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                meta = {}
+
         if alias:
-            import json as _json
-            meta_path = exp_dir / "setting" / "meta.json"
-            meta_path.parent.mkdir(parents=True, exist_ok=True)
-            meta_path.write_text(
-                _json.dumps({"alias": alias}, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-            logger.info("_run_experiment_pipeline: wrote alias=%r to meta.json for %s", alias, task_id)
+            meta["alias"] = alias
+
+        # ── Create per-experiment Bitable table (idempotent via meta.json) ────
+        bitable_table_id: str = meta.get("bitable_table_id", "")
+        if not bitable_table_id:
+            table_name = (alias or task_id)[:100]
+            try:
+                bitable_table_id = await svc.bitable.create_experiment_table(
+                    bitable_app_token, table_name
+                )
+                logger.info(
+                    "[%s] Created bitable table '%s' table_id=%s",
+                    task_id, table_name, bitable_table_id,
+                )
+            except Exception as exc:
+                logger.warning("[%s] Failed to create bitable table (non-fatal): %s", task_id, exc)
+                bitable_table_id = ""
+
+        meta["bitable_app_token"] = bitable_app_token
+        meta["bitable_table_id"] = bitable_table_id
+        meta_path.parent.mkdir(parents=True, exist_ok=True)
+        meta_path.write_text(_json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(
+            "_run_experiment_pipeline: wrote meta.json alias=%r bitable_table_id=%s for %s",
+            alias, bitable_table_id, task_id,
+        )
 
         script_path = await svc.ai.generate_experiment(
             user_text=instruction or "(用户发送了图片，请参考图片内容生成实验脚本)",
@@ -1202,18 +1287,37 @@ async def _run_phase_b_and_c(
     summary_path.write_text(summary_md, encoding="utf-8")
 
     script_path = str(exp_dir / "setting" / "main.py")
-    await svc.bitable.append_record({
-        "Command":       command_text[:2000],
-        "TaskID":        task_id,
-        "ScriptPath":    script_path,
-        "Status":        status,
-        "Duration_s":    round(result.duration_seconds, 2),
-        "Stdout":        result.stdout[:2000],
-        "Stderr":        result.stderr[:500],
-        "PlanPath":      str(plan_path),
-        "LogPath":       result.run_log_path,
-        "ResultSummary": summary_md[:5000],
-    })
+
+    # ── Phase D: Write to user's personal Bitable table ──────────────────────
+    import json as _json
+    from datetime import datetime as _dt
+    _meta: dict = {}
+    _meta_path = exp_dir / "setting" / "meta.json"
+    if _meta_path.exists():
+        try:
+            _meta = _json.loads(_meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    _bt_app = _meta.get("bitable_app_token", "")
+    _bt_table = _meta.get("bitable_table_id", "")
+    if _bt_app and _bt_table:
+        try:
+            await svc.bitable.append_record(_bt_app, _bt_table, {
+                "Epoch_Step":  0,
+                "Metric_Name": "run_summary",
+                "Value":       round(result.duration_seconds, 2),
+                "Log_Message": (
+                    f"Command: {command_text[:300]}\n"
+                    f"Status: {status}\n"
+                    f"TaskID: {task_id}\n\n"
+                    f"{summary_md[:4000]}"
+                ),
+                "Timestamp": _dt.now().isoformat(),
+            })
+        except Exception as exc:
+            logger.warning("[%s] Bitable append_record failed (non-fatal): %s", task_id, exc)
+    else:
+        logger.info("[%s] No bitable tokens in meta.json, skipping record write.", task_id)
 
     plan_summary = plan_text[:_PLAN_CARD_MAX] if plan_text else "(计划文件不存在)"
     _display_alias = alias or get_experiment_alias(exp_dir)

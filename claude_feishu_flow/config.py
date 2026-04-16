@@ -20,10 +20,10 @@ class Config(BaseSettings):
     # when feishu_bot_open_id is not configured. Must match the bot's name exactly.
     feishu_bot_name: str = "AutoMyFeishu"
 
-    # Feishu Bitable target
-    bitable_app_token: str
-    # table_id is discovered/created automatically via ensure_experiment_table()
-    # Optionally set to skip the lookup on every startup (populated at runtime).
+    # Feishu Bitable target (legacy global token — no longer required)
+    # Users now bind their own Bitable via /bind <app_token>.
+    # This field is kept for backwards compatibility but is no longer read at startup.
+    bitable_app_token: str = ""
     bitable_table_id: str = ""
 
     # LLM provider selection: "anthropic" (default) or "kimi"

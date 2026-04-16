@@ -84,7 +84,6 @@ def _make_services(config=None) -> Services:
             feishu_app_secret="secret",
             feishu_verification_token=VERIFICATION_TOKEN,
             feishu_encrypt_key="",
-            bitable_app_token="btoken",
             anthropic_api_key="ak",
         )
 

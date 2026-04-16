@@ -96,10 +96,9 @@ def create_app(config: Config) -> FastAPI:
 
         feishu_client = FeishuClient(token_manager, http)
         messaging = Messaging(feishu_client)
-        bitable = BitableClient(feishu_client, config.bitable_app_token, config.bitable_table_id)
-
-        # Auto-create/find the Experiment_Results table
-        await bitable.ensure_experiment_table()
+        # BitableClient no longer holds global tokens — each call passes app_token + table_id
+        # from the user's personal binding (stored in Experiments/<open_id>/user_config.json).
+        bitable = BitableClient(feishu_client)
 
         if config.llm_provider == "kimi":
             if not config.kimi_api_key:

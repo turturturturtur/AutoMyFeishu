@@ -1,12 +1,15 @@
-"""Manual integration test for Step 5 — Feishu Bitable auto-init + write/read.
+"""Manual integration test for Feishu Bitable per-user binding + dynamic table creation.
 
-Only requires BITABLE_APP_TOKEN in .env. The script will:
-  1. Call ensure_experiment_table() to find or create the 'Experiment_Results' table.
+Requires BITABLE_APP_TOKEN to be provided as a command-line argument or set via
+the APP_TOKEN env var. The script will:
+  1. Create a new experiment table.
   2. Append a test record.
   3. List records to verify the write.
 
 Run:
-    python scripts/test_bitable_api.py
+    python scripts/test_bitable_api.py <app_token>
+    # or
+    APP_TOKEN=bascXXX python scripts/test_bitable_api.py
 """
 
 from __future__ import annotations
@@ -28,32 +31,33 @@ async def main() -> None:
     from claude_feishu_flow.feishu.bitable import BitableClient
     from claude_feishu_flow.feishu.client import FeishuClient
 
+    app_token = sys.argv[1] if len(sys.argv) > 1 else os.getenv("APP_TOKEN", "")
+    if not app_token:
+        print("[FAIL] Please provide app_token as first argument or APP_TOKEN env var.")
+        return
+
     try:
         config = Config()
     except Exception as e:
         print(f"[FAIL] Could not load Config: {e}")
         return
 
-    if "xxx" in config.bitable_app_token:
-        print("[SKIP] BITABLE_APP_TOKEN not set in .env — fill it in and re-run.")
-        return
-
     async with httpx.AsyncClient(timeout=15.0) as http:
         manager = TokenManager(http, config.feishu_app_id, config.feishu_app_secret)
         await manager.start()
         client = FeishuClient(manager, http)
-        bitable = BitableClient(client, config.bitable_app_token)
+        bitable = BitableClient(client)
 
         # ------------------------------------------------------------------
-        # Test 1: ensure_experiment_table (auto-init schema)
+        # Test 1: create_experiment_table
         # ------------------------------------------------------------------
-        print("\n=== Test 1: BitableClient.ensure_experiment_table ===")
+        print(f"\n=== Test 1: BitableClient.create_experiment_table (app_token={app_token}) ===")
         try:
-            table_id = await bitable.ensure_experiment_table()
-            print(f"[PASS] Table ready: table_id={table_id}")
+            table_id = await bitable.create_experiment_table(app_token, "integration_test_table")
+            print(f"[PASS] Table created: table_id={table_id}")
         except Exception as e:
-            print(f"[FAIL] ensure_experiment_table: {e}")
-            print("       Check that the bot has 'bitable:app' read/write permission.")
+            print(f"[FAIL] create_experiment_table: {e}")
+            print("       Check that the bot has been added as an editable collaborator on the Bitable.")
             await manager.stop()
             return
 
@@ -61,17 +65,16 @@ async def main() -> None:
         # Test 2: append_record
         # ------------------------------------------------------------------
         print("\n=== Test 2: BitableClient.append_record ===")
+        from datetime import datetime
         test_fields = {
-            "Command": "integration test — please delete",
-            "TaskID": "test-uuid-0000",
-            "ScriptPath": "./workspaces/test-uuid-0000/experiment.py",
-            "Status": "success",
-            "Duration_s": 0.42,
-            "Stdout": "Hello from integration test",
-            "Stderr": "",
+            "Epoch_Step": 0,
+            "Metric_Name": "run_summary",
+            "Value": 0.42,
+            "Log_Message": "integration test — please delete",
+            "Timestamp": datetime.now().isoformat(),
         }
         try:
-            record_id = await bitable.append_record(test_fields)
+            record_id = await bitable.append_record(app_token, table_id, test_fields)
             print(f"[PASS] Record created: record_id={record_id}")
         except Exception as e:
             print(f"[FAIL] append_record: {e}")
@@ -83,7 +86,7 @@ async def main() -> None:
         # ------------------------------------------------------------------
         print("\n=== Test 3: BitableClient.list_records ===")
         try:
-            records = await bitable.list_records(page_size=10)
+            records = await bitable.list_records(app_token, table_id, page_size=10)
             print(f"[PASS] Fetched {len(records)} record(s)")
             found = any(r.get("record_id") == record_id for r in records)
             status = "[PASS]" if found else "[INFO]"
