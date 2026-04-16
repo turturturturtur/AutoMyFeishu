@@ -142,6 +142,11 @@ def create_app(config: Config) -> FastAPI:
 
     app = FastAPI(title="claude-feishu-flow", lifespan=lifespan)
 
+    from fastapi.staticfiles import StaticFiles
+    from pathlib import Path as _Path
+    _static_dir = _Path(__file__).parent / "static"
+    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
     from claude_feishu_flow.server.routes import router
     app.include_router(router)
 
