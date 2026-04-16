@@ -40,6 +40,7 @@
 - [Web 控制台](#web-控制台)
 - [配置说明](#配置说明)
 - [项目结构](#项目结构)
+- [生产环境部署 (Linux 服务)](#生产环境部署-linux-服务)
 - [开发路线图](#开发路线图)
 - [参与贡献](#参与贡献)
 
@@ -337,6 +338,57 @@ claude_feishu_flow/
     ├── web.py             # REST API + 控制台端点
     ├── static/            # Vue 3 + Tailwind 编译产物
     └── templates/         # index.html SPA 入口
+```
+
+---
+
+## 生产环境部署 (Linux 服务)
+
+对于裸金属 Linux 服务器（包括 GPU 工作站），AutoMyFeishu 提供了一键安装脚本和 systemd 服务模板，可将其作为全托管后台守护进程运行，支持崩溃自动重启和开机自启。
+
+### 安装依赖
+
+```bash
+git clone https://github.com/turturturturtur/AutoMyFeishu.git
+cd AutoMyFeishu
+bash install.sh
+```
+
+`install.sh` 将自动完成以下操作：
+
+- 检查 Python 3.10+ 是否可用
+- 在项目目录下创建 `.venv` 虚拟环境
+- 从 `requirements.txt` 安装所有依赖
+- 若 `.env` 不存在，自动从 `.env.example` 复制一份
+
+### 填写配置
+
+```bash
+nano .env   # 填入 FEISHU_APP_ID、FEISHU_APP_SECRET 以及 LLM API Key
+```
+
+### 注册并启动服务
+
+```bash
+sudo bash manage.sh install   # 写入 unit 文件，启用开机自启
+sudo bash manage.sh start     # 立即启动服务
+```
+
+### 服务管理命令
+
+| 命令 | 说明 |
+| --- | --- |
+| `sudo bash manage.sh start` | 启动服务 |
+| `sudo bash manage.sh stop` | 停止服务 |
+| `sudo bash manage.sh restart` | 重启服务 |
+| `bash manage.sh status` | 查看 systemd 状态 |
+| `bash manage.sh log` | 实时追踪日志（Ctrl-C 退出） |
+| `sudo bash manage.sh uninstall` | 彻底移除服务 |
+
+日志写入 `logs/service.log`，也可通过以下命令查看：
+
+```bash
+journalctl -u claude-feishu-flow -f
 ```
 
 ---

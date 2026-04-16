@@ -40,6 +40,7 @@
 - [Web Dashboard](#web-dashboard)
 - [Configuration](#configuration)
 - [Project Structure](#project-structure)
+- [Production Deployment (Linux Service)](#production-deployment-linux-service)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
 
@@ -337,6 +338,57 @@ claude_feishu_flow/
     ├── web.py             # REST API + dashboard endpoints
     ├── static/            # Vue 3 + Tailwind compiled assets
     └── templates/         # index.html SPA shell
+```
+
+---
+
+## Production Deployment (Linux Service)
+
+For bare-metal Linux servers (including GPU workstations), AutoMyFeishu ships with a Bash installer and a systemd service template so you can run it as a fully managed background daemon with automatic restart on crash and autostart on boot.
+
+### Step 1 — Install dependencies
+
+```bash
+git clone https://github.com/turturturturtur/AutoMyFeishu.git
+cd AutoMyFeishu
+bash install.sh
+```
+
+`install.sh` will:
+
+- Verify Python 3.10+ is available
+- Create a `.venv` virtual environment in the project directory
+- Install all dependencies from `requirements.txt`
+- Copy `.env.example` → `.env` if no `.env` exists yet
+
+### Step 2 — Configure
+
+```bash
+nano .env   # fill in FEISHU_APP_ID, FEISHU_APP_SECRET, and your LLM key
+```
+
+### Step 3 — Register and start the service
+
+```bash
+sudo bash manage.sh install   # writes unit file, enables autostart on boot
+sudo bash manage.sh start     # starts the service now
+```
+
+### Service management
+
+| Command | Effect |
+| --- | --- |
+| `sudo bash manage.sh start` | Start the service |
+| `sudo bash manage.sh stop` | Stop the service |
+| `sudo bash manage.sh restart` | Restart the service |
+| `bash manage.sh status` | Show systemd status |
+| `bash manage.sh log` | Tail live logs (Ctrl-C to exit) |
+| `sudo bash manage.sh uninstall` | Remove the service entirely |
+
+Logs are written to `logs/service.log` and are also accessible via:
+
+```bash
+journalctl -u claude-feishu-flow -f
 ```
 
 ---
