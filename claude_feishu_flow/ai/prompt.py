@@ -219,6 +219,7 @@ def build_main_agent_prompt(user_exp_dir: Optional[Path] = None) -> str:
 3. **launch_experiment** — 启动一个全新实验。当用户的意图是"运行/启动/做一个新实验"时调用。
    - 将用户的原始需求作为 instruction 参数传入，不要改写。
    - 如果用户明确给出了实验名称（如"做一个 ResNet 消融实验"），请提取一个简洁别名（不超过15字，中英文均可）作为 alias 参数传入（例如 'ResNet消融实验'）。如用户未提及名称，可根据实验内容自动生成一个描述性别名。
+   - 如果用户提供了一个已有代码库的绝对路径（如 /home/user/repo），请直接将其原样作为 base_repo 参数传入；如果用户指定了 Storage 中的仓库名，同样原样传入。
    - 调用后，系统会自动接管后续的脚本生成和执行，你不需要再做任何事情。
 
 4. **edit_experiment** — 修改一个已有实验。当用户明确指定要修改某个实验（提供了 task_id）时调用。

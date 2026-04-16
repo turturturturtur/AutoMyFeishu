@@ -157,7 +157,7 @@ SYNC_BACK_REPO_TOOL: dict = {
             },
             "repo_name": {
                 "type": "string",
-                "description": "目标仓库名称（与启动时的 base_repo 参数相同）。",
+                "description": "同 base_repo，支持传入绝对路径或 Storage 仓库名（与启动时的 base_repo 参数相同）。",
             },
         },
         "required": ["task_id", "repo_name"],
@@ -196,7 +196,7 @@ LAUNCH_EXPERIMENT_TOOL: dict = {
             },
             "base_repo": {
                 "type": "string",
-                "description": "如果要基于已有仓库实验，填入该仓库的名称（对应 Storage/<open_id>/<repo_name>/ 目录）。系统会将该仓库全量克隆到实验沙盒。留空则创建空白实验目录。",
+                "description": "如果要基于已有仓库实验，可以填入 Storage 下的仓库名（对应 Storage/<open_id>/<repo_name>/ 目录），或者直接填入宿主机上的绝对路径（如 /home/user/repo）。系统会将该仓库全量克隆到实验沙盒。留空则创建空白实验目录。",
             },
         },
         "required": ["instruction"],
@@ -827,9 +827,12 @@ async def handle_sync_back(
     if not exp_dir.is_dir():
         return f"❌ 实验目录不存在: {exp_dir}"
 
-    storage_repo_dir = storage_dir / open_id / repo_name
+    if repo_name.startswith("/"):
+        storage_repo_dir = Path(repo_name)
+    else:
+        storage_repo_dir = storage_dir / open_id / repo_name
     if not storage_repo_dir.is_dir():
-        return f"❌ Storage 中未找到仓库 '{repo_name}'（路径: {storage_repo_dir}）。请确认仓库已上传到 Storage。"
+        return f"❌ 未找到仓库路径 '{repo_name}'（解析为: {storage_repo_dir}）。请确认路径正确。"
 
     synced: list[str] = []
     skipped_count = 0

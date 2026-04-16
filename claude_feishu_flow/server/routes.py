@@ -1008,7 +1008,10 @@ async def _run_experiment_pipeline(
         # ── Seed from Storage repo (if base_repo was specified) ───────────────
         if base_repo:
             import shutil as _shutil
-            storage_repo_src = svc.config.resolved_storage_dir() / open_id / base_repo
+            if base_repo.startswith("/"):
+                storage_repo_src = Path(base_repo)
+            else:
+                storage_repo_src = svc.config.resolved_storage_dir() / open_id / base_repo
             if storage_repo_src.is_dir():
                 _shutil.copytree(
                     str(storage_repo_src),
@@ -1017,7 +1020,7 @@ async def _run_experiment_pipeline(
                     dirs_exist_ok=True,
                 )
                 logger.info(
-                    "[%s] Seeded exp_dir from Storage repo '%s': %s → %s",
+                    "[%s] Seeded exp_dir from repo '%s': %s → %s",
                     task_id, base_repo, storage_repo_src, exp_dir,
                 )
                 await notify(f"已从仓库 `{base_repo}` 克隆到实验沙盒，正在生成修改方案...")
@@ -1026,7 +1029,7 @@ async def _run_experiment_pipeline(
                     "[%s] base_repo '%s' not found at %s, proceeding with empty exp_dir",
                     task_id, base_repo, storage_repo_src,
                 )
-                await notify(f"⚠️ Storage 中未找到仓库 '{base_repo}'，将创建空白实验目录。")
+                await notify(f"⚠️ 未找到仓库 '{base_repo}'，将创建空白实验目录。")
 
         # ── Read / initialise meta.json ───────────────────────────────────────
         import json as _json
