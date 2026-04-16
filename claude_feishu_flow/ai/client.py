@@ -373,6 +373,8 @@ class ClaudeClient:
         history: list[dict] | None = None,
         scheduler: Any | None = None,
         user_exp_dir: Optional[Path] = None,
+        svc: Any | None = None,
+        open_id: str = "",
     ) -> MainAgentResult:
         """Orchestrator agent: understands natural language and triggers experiment operations.
 
@@ -596,6 +598,23 @@ class ClaudeClient:
                         result_text = scheduler.cancel_job(block.input.get("job_id", ""))
                     else:
                         result_text = "定时任务功能未启用（scheduler 未初始化）。"
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_text,
+                    })
+
+                elif tool_name == "write_bitable":
+                    if svc is None or not open_id:
+                        result_text = "❌ 写入失败：write_bitable 工具未获得必要的上下文（svc 或 open_id 缺失）。"
+                    else:
+                        from .tools import handle_write_bitable
+                        result_text = await handle_write_bitable(
+                            svc=svc,
+                            open_id=open_id,
+                            table_name=block.input.get("table_name", "Test_Table"),
+                            test_message=block.input.get("test_message", ""),
+                        )
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,

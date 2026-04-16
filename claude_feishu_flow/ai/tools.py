@@ -22,6 +22,7 @@ Main Agent (Orchestrator) tools (MAIN_AGENT_TOOLS):
   list_cron_jobs           — inline: list all active scheduled jobs
   cancel_cron_job          — inline: cancel a scheduled job by ID
   write_document           — blocking: draft a long Markdown document or technical report
+  write_bitable            — inline: write a test record into the user's Feishu Bitable
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ import asyncio
 import dataclasses
 import logging
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -368,6 +370,28 @@ RENAME_EXPERIMENT_TOOL: dict = {
     },
 }
 
+WRITE_BITABLE_TOOL: dict = {
+    "name": "write_bitable",
+    "description": (
+        "当用户要求你往飞书多维表格里写点东西、测试表格连通性，或者主动记录信息时调用。"
+        "会向用户绑定的多维表格写入一条记录，可用于验证表格是否正常工作。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "table_name": {
+                "type": "string",
+                "description": "数据表名称，缺省为 Test_Table。",
+            },
+            "test_message": {
+                "type": "string",
+                "description": "要写入表格的测试内容或指令信息。",
+            },
+        },
+        "required": ["test_message"],
+    },
+}
+
 MAIN_AGENT_TOOLS: list[dict] = [
     EXECUTE_BASH_TOOL,
     LIST_EXPERIMENTS_TOOL,
@@ -380,6 +404,7 @@ MAIN_AGENT_TOOLS: list[dict] = [
     CANCEL_CRON_JOB_TOOL,
     WRITE_DOCUMENT_TOOL,
     RENAME_EXPERIMENT_TOOL,
+    WRITE_BITABLE_TOOL,
 ]
 
 
@@ -890,3 +915,54 @@ async def handle_sync_back(
         f"{synced_list}{more}\n"
         f"（已跳过 {skipped_count} 个文件：大文件/二进制/日志/软链接）"
     )
+
+
+async def handle_write_bitable(
+    svc: "Any",
+    open_id: str,
+    table_name: str,
+    test_message: str,
+) -> str:
+    """Write a test record into the user's Feishu Bitable.
+
+    Reads bitable_app_token from Experiments/<open_id>/user_config.json,
+    auto-creates the table if it does not exist, then appends one record.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+    from datetime import datetime as _dt
+
+    # Load user config to get bitable_app_token
+    config_path = svc.config.resolved_experiments_dir() / open_id / "user_config.json"
+    app_token = ""
+    try:
+        if _Path(config_path).exists():
+            data = _json.loads(_Path(config_path).read_text(encoding="utf-8"))
+            app_token = data.get("bitable_app_token", "")
+    except Exception as exc:
+        logger.warning("handle_write_bitable: failed to read user_config.json: %s", exc)
+
+    if not app_token:
+        return "❌ 写入失败：用户未绑定多维表格，请先使用 /bind <app_token> 绑定。"
+
+    try:
+        table_id = await svc.bitable.create_experiment_table(app_token, table_name)
+    except Exception as exc:
+        logger.warning("handle_write_bitable: create_experiment_table failed: %s", exc)
+        return f"❌ 创建/获取数据表失败：{exc}"
+
+    record = {
+        "Epoch_Step": 0,
+        "Metric_Name": "manual_write_test",
+        "Value": 0,
+        "Log_Message": f"Command: {test_message}\nStatus: success\nTaskID: test_manual_write\n\nManual Bitable Test",
+        "Timestamp": _dt.now().isoformat(),
+    }
+
+    try:
+        await svc.bitable.append_record(app_token, table_id, record)
+    except Exception as exc:
+        logger.warning("handle_write_bitable: append_record failed: %s", exc)
+        return f"❌ 写入记录失败：{exc}"
+
+    return f"✅ 成功向多维表格的 [{table_name}] 数据表中写入了测试记录！"

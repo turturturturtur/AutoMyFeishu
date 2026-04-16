@@ -676,6 +676,8 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                 history=history,
                 scheduler=svc.scheduler,
                 user_exp_dir=exp_base_dir,
+                svc=svc,
+                open_id=open_id,
             )
             if result.text:
                 await svc.messaging.send_markdown(

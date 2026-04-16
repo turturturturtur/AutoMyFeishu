@@ -360,6 +360,8 @@ class KimiClient:
         history: list[dict] | None = None,
         scheduler=None,
         user_exp_dir: Optional[Path] = None,
+        svc=None,
+        open_id: str = "",
     ) -> MainAgentResult:
         """Orchestrator agent (Kimi): understands natural language and triggers experiment operations.
 
@@ -569,6 +571,19 @@ class KimiClient:
                         result_text = scheduler.cancel_job(tool_input.get("job_id", ""))
                     else:
                         result_text = "定时任务功能未启用（scheduler 未初始化）。"
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+
+                elif tool_name == "write_bitable":
+                    if svc is None or not open_id:
+                        result_text = "❌ 写入失败：write_bitable 工具未获得必要的上下文（svc 或 open_id 缺失）。"
+                    else:
+                        from .tools import handle_write_bitable
+                        result_text = await handle_write_bitable(
+                            svc=svc,
+                            open_id=open_id,
+                            table_name=tool_input.get("table_name", "Test_Table"),
+                            test_message=tool_input.get("test_message", ""),
+                        )
                     messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
 
                 else:
@@ -923,6 +938,8 @@ class KimiClient:
         history: list[dict],
         user_exp_dir: Optional[Path] = None,
         send_image_callback: Optional[Callable[[Path], Coroutine[Any, Any, str]]] = None,
+        storage_dir: Optional[Path] = None,
+        open_id: str = "",
     ) -> SubAgentResult:
         """Handle a single turn of Sub Agent conversation.
 
@@ -997,6 +1014,17 @@ class KimiClient:
                                 if not p.is_absolute():
                                     p = exp_dir / p
                                 result_text = await send_image_callback(p)
+                        elif tc.function.name == "sync_back_repo":
+                            if storage_dir is None or not open_id:
+                                result_text = "❌ sync_back_repo 不可用：未提供 storage_dir 或 open_id。"
+                            else:
+                                from .tools import handle_sync_back
+                                result_text = await handle_sync_back(
+                                    tool_input,
+                                    exp_base_dir=exp_dir.parent,
+                                    storage_dir=storage_dir,
+                                    open_id=open_id,
+                                )
                         else:
                             result_text = await _dispatch_tool(tc.function.name, tool_input, exp_dir)
                     except Exception as tool_exc:
