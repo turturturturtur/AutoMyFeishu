@@ -22,6 +22,7 @@ from typing import Optional
 
 import openai
 
+from claude_feishu_flow.ai.token_tracker import get_tracker
 from claude_feishu_flow.ai.client import SubAgentResult
 from claude_feishu_flow.ai.prompt import (
     build_casual_chat_prompt,
@@ -100,7 +101,18 @@ class KimiClient:
             base_url=base_url,
             default_headers={"User-Agent": "claude-code/0.1.0"},
         )
+        self._tracker = get_tracker()
         logger.info("KimiClient ready — model=%s  base_url=%s", self._model, base_url)
+
+    async def _create_completion(self, **kwargs: object):
+        """Wrapper around chat.completions.create that records token usage."""
+        response = await self._create_completion(**kwargs)  # type: ignore[arg-type]
+        if response.usage:
+            await self._tracker.record(
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens,
+            )
+        return response
 
     async def generate_experiment(
         self,
@@ -152,7 +164,7 @@ class KimiClient:
         for round_num in range(1, _MAX_ROUNDS + 1):
             logger.info("Kimi round %d — sending %d messages", round_num, len(messages))
 
-            response = await self._client.chat.completions.create(
+            response = await self._create_completion(
                 model=self._model,
                 max_tokens=8192,
                 messages=[{"role": "system", "content": system_prompt}] + messages,
@@ -251,7 +263,7 @@ class KimiClient:
         Returns:
             Markdown-formatted summary string.
         """
-        response = await self._client.chat.completions.create(
+        response = await self._create_completion(
             model=self._model,
             max_tokens=4096,
             messages=[
@@ -302,7 +314,7 @@ class KimiClient:
 
         for round_num in range(1, self._CASUAL_MAX_ROUNDS + 1):
             logger.info("chat_casual round %d", round_num)
-            response = await self._client.chat.completions.create(
+            response = await self._create_completion(
                 model=self._model,
                 max_tokens=2048,
                 messages=messages,
@@ -400,7 +412,7 @@ class KimiClient:
 
         for round_num in range(1, self._MAIN_AGENT_MAX_ROUNDS + 1):
             logger.info("chat_main_agent (Kimi) round %d", round_num)
-            response = await self._client.chat.completions.create(
+            response = await self._create_completion(
                 model=self._model,
                 max_tokens=2048,
                 messages=messages,
@@ -613,7 +625,7 @@ class KimiClient:
         saved_main = False
 
         while True:
-            response = await self._client.chat.completions.create(
+            response = await self._create_completion(
                 model=self._model,
                 max_tokens=4096,
                 messages=[{"role": "system", "content": system_prompt}] + messages,
@@ -707,7 +719,7 @@ class KimiClient:
         for round_num in range(1, _MAX_ROUNDS + 1):
             logger.info("Kimi fix round %d — sending %d messages", round_num, len(messages))
 
-            response = await self._client.chat.completions.create(
+            response = await self._create_completion(
                 model=self._model,
                 max_tokens=8192,
                 messages=[{"role": "system", "content": system_prompt}] + messages,
@@ -808,7 +820,7 @@ class KimiClient:
 
         for round_num in range(1, self._REVIEW_MAX_ROUNDS + 1):
             logger.info("review_experiment (Kimi) round %d", round_num)
-            response = await self._client.chat.completions.create(
+            response = await self._create_completion(
                 model=self._model,
                 max_tokens=4096,
                 messages=messages,
@@ -889,7 +901,7 @@ class KimiClient:
 
         logger.info("draft_document (Kimi): drafting document, instruction=%r, exp_dir=%s", instruction[:80], related_exp_dir)
 
-        response = await self._client.chat.completions.create(
+        response = await self._create_completion(
             model=self._model,
             max_tokens=8192,
             messages=[
@@ -927,7 +939,7 @@ class KimiClient:
         for round_num in range(1, self._SUB_AGENT_MAX_ROUNDS + 1):
             logger.info("Kimi sub agent round %d for task=%s", round_num, task_id)
 
-            response = await self._client.chat.completions.create(
+            response = await self._create_completion(
                 model=self._model,
                 max_tokens=8192,
                 messages=[{"role": "system", "content": system_prompt}] + history,

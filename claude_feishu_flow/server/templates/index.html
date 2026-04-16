@@ -45,7 +45,10 @@
   <header class="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center gap-3">
     <span class="text-xl font-bold tracking-tight text-indigo-400">AutoMyFeishu</span>
     <span class="text-gray-500 text-sm">Dashboard</span>
-    <span class="ml-auto text-xs text-gray-600">{{ nowStr }}</span>
+    <span class="ml-auto flex items-center gap-4">
+      <span id="token-stats" class="text-xs text-yellow-500 font-mono">🪙 In: -- | Out: --</span>
+      <span class="text-xs text-gray-600">{{ nowStr }}</span>
+    </span>
   </header>
 
   <!-- ── Tabs ──────────────────────────────────────────────────────────── -->
@@ -354,6 +357,20 @@ createApp({
       if (data) histories.value = data;
     }
 
+    function fmtTokens(n) {
+      if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+      if (n >= 1_000) return Math.round(n / 1_000) + 'K';
+      return String(n);
+    }
+
+    async function fetchSystemStats() {
+      const data = await apiFetch('/api/system_stats');
+      if (data) {
+        document.getElementById('token-stats').textContent =
+          `🪙 In: ${fmtTokens(data.input_tokens)} | Out: ${fmtTokens(data.output_tokens)}`;
+      }
+    }
+
     // ── open logs from dashboard ─────────────────────────────────────────
     function openLogs(taskId) {
       selectedLogExp.value = taskId;
@@ -378,12 +395,13 @@ createApp({
       updateClock();
       await fetchExperiments();
       await fetchHistories();
+      await fetchSystemStats();
 
       // Clock tick every second
       timers.push(setInterval(updateClock, 1000));
 
-      // Experiments every 5 s
-      timers.push(setInterval(fetchExperiments, 5000));
+      // Experiments + token stats every 5 s
+      timers.push(setInterval(() => { fetchExperiments(); fetchSystemStats(); }, 5000));
 
       // Logs: every 3 s when Running, else every 10 s
       timers.push(setInterval(() => {

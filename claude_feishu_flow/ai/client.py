@@ -11,6 +11,7 @@ from typing import AsyncIterator, Optional
 
 import anthropic
 
+from claude_feishu_flow.ai.token_tracker import get_tracker
 from claude_feishu_flow.ai.prompt import (
     build_casual_chat_prompt,
     build_edit_chat_system_prompt,
@@ -87,11 +88,21 @@ class ClaudeClient:
         if base_url:
             kwargs["base_url"] = base_url
         self._client = anthropic.AsyncAnthropic(**kwargs)
+        self._tracker = get_tracker()
         logger.info(
             "ClaudeClient ready — model=%s  base_url=%s",
             self._model,
             base_url or "(official Anthropic API)",
         )
+
+    async def _create_message(self, **kwargs: object) -> anthropic.types.Message:
+        """Wrapper around messages.create that records token usage."""
+        response = await self._create_message(**kwargs)  # type: ignore[arg-type]
+        await self._tracker.record(
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+        )
+        return response
 
     async def generate_experiment(
         self,
@@ -169,7 +180,7 @@ class ClaudeClient:
         for round_num in range(1, _MAX_ROUNDS + 1):
             logger.info("Claude round %d — sending %d messages", round_num, len(messages))
 
-            response = await self._client.messages.create(
+            response = await self._create_message(
                 model=self._model,
                 max_tokens=8192,
                 system=build_system_prompt(),
@@ -257,7 +268,7 @@ class ClaudeClient:
         Returns:
             Markdown-formatted summary string.
         """
-        response = await self._client.messages.create(
+        response = await self._create_message(
             model=self._model,
             max_tokens=4096,
             system=build_summarize_system_prompt(),
@@ -309,7 +320,7 @@ class ClaudeClient:
 
         for round_num in range(1, self._CASUAL_MAX_ROUNDS + 1):
             logger.info("chat_casual round %d", round_num)
-            response = await self._client.messages.create(
+            response = await self._create_message(
                 model=self._model,
                 max_tokens=2048,
                 system=system_prompt,
@@ -417,7 +428,7 @@ class ClaudeClient:
 
         for round_num in range(1, self._MAIN_AGENT_MAX_ROUNDS + 1):
             logger.info("chat_main_agent round %d", round_num)
-            response = await self._client.messages.create(
+            response = await self._create_message(
                 model=self._model,
                 max_tokens=2048,
                 system=system_prompt,
@@ -658,7 +669,7 @@ class ClaudeClient:
 
         while True:
             # ── Call Claude ───────────────────────────────────────────────
-            response = await self._client.messages.create(
+            response = await self._create_message(
                 model=self._model,
                 max_tokens=4096,
                 system=build_edit_chat_system_prompt(),
@@ -766,7 +777,7 @@ class ClaudeClient:
         for round_num in range(1, _MAX_ROUNDS + 1):
             logger.info("Claude fix round %d — sending %d messages", round_num, len(messages))
 
-            response = await self._client.messages.create(
+            response = await self._create_message(
                 model=self._model,
                 max_tokens=8192,
                 system=build_fix_system_prompt(),
@@ -867,7 +878,7 @@ class ClaudeClient:
 
         for round_num in range(1, self._REVIEW_MAX_ROUNDS + 1):
             logger.info("review_experiment round %d", round_num)
-            response = await self._client.messages.create(
+            response = await self._create_message(
                 model=self._model,
                 max_tokens=4096,
                 system=system_prompt,
@@ -949,7 +960,7 @@ class ClaudeClient:
 
         logger.info("draft_document: drafting document, instruction=%r, exp_dir=%s", instruction[:80], related_exp_dir)
 
-        response = await self._client.messages.create(
+        response = await self._create_message(
             model=self._model,
             max_tokens=8192,
             system=system_prompt,
@@ -1000,7 +1011,7 @@ class ClaudeClient:
         for round_num in range(1, self._SUB_AGENT_MAX_ROUNDS + 1):
             logger.info("Sub agent round %d for task=%s", round_num, task_id)
 
-            response = await self._client.messages.create(
+            response = await self._create_message(
                 model=self._model,
                 max_tokens=8192,
                 system=system_prompt,

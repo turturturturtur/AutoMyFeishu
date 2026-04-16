@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import logging.handlers
+import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Optional
@@ -149,8 +151,32 @@ def create_app(config: Config) -> FastAPI:
     return app
 
 
+def _setup_logging() -> None:
+    """Configure root logger: console + rotating file handler to logs/system.log."""
+    os.makedirs("logs", exist_ok=True)
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+    # Console handler (replaces basicConfig's default StreamHandler)
+    console = logging.StreamHandler()
+    console.setFormatter(fmt)
+    root.addHandler(console)
+
+    # Rotating file handler — 10 MB per file, keep 5 backups
+    file_handler = logging.handlers.RotatingFileHandler(
+        "logs/system.log",
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(fmt)
+    root.addHandler(file_handler)
+
+
 def create_app_from_env() -> FastAPI:
     """Uvicorn-compatible factory: loads Config from environment/.env, then calls create_app."""
-    logging.basicConfig(level=logging.INFO)
+    _setup_logging()
     config = Config()
     return create_app(config)

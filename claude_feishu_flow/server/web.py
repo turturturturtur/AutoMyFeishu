@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from claude_feishu_flow.ai.tools import get_experiment_alias
+from claude_feishu_flow.ai.token_tracker import get_tracker
 from claude_feishu_flow.server.app import Services
 
 logger = logging.getLogger(__name__)
@@ -182,3 +183,9 @@ async def get_histories(request: Request) -> dict[str, Any]:
     }
 
     return {"main_agent": main_agent, "sub_agent": sub_agent}
+
+
+@router.get("/api/system_stats")
+async def get_system_stats() -> dict[str, int]:
+    """Return cumulative token usage across all AI API calls."""
+    return get_tracker().get()
