@@ -160,6 +160,48 @@ class SchedulerManager:
             self._save_jobs()
         return job.id
 
+    def update_cron_job(
+        self,
+        job_id: str,
+        cron_expr: str,
+        task_description: str,
+        chat_id: str,
+    ) -> None:
+        """Update an existing cron job's trigger and description in-place.
+
+        The job_id is preserved. Raises ValueError for bad cron_expr,
+        JobLookupError (from APScheduler) if job_id is not found.
+        """
+        parts = cron_expr.strip().split()
+        if len(parts) != 5:
+            raise ValueError(
+                f"Invalid cron expression {cron_expr!r}. "
+                "Expected 5 fields: minute hour day month weekday."
+            )
+        minute, hour, day, month, dow = parts
+        trigger = CronTrigger(
+            minute=minute,
+            hour=hour,
+            day=day,
+            month=month,
+            day_of_week=dow,
+        )
+        self._scheduler.reschedule_job(job_id, trigger=trigger)
+        self._scheduler.modify_job(
+            job_id,
+            kwargs={"task_description": task_description, "chat_id": chat_id},
+        )
+        self._job_meta[job_id] = {
+            "cron_expression": cron_expr,
+            "task_description": task_description,
+            "chat_id": chat_id,
+        }
+        self._save_jobs()
+        logger.info(
+            "Cron job updated: id=%s cron=%r task=%r chat=%s",
+            job_id, cron_expr, task_description, chat_id,
+        )
+
     def list_jobs(self) -> str:
         """Return a human-readable summary of all scheduled jobs.
 

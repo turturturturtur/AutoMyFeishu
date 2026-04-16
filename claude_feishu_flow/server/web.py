@@ -404,6 +404,24 @@ async def create_cron_job(request: Request, payload: Dict[str, Any]) -> dict[str
     return {"job_id": job_id, "status": "created"}
 
 
+@router.put("/api/cron_jobs/{job_id}")
+async def update_cron_job(job_id: str, request: Request, payload: Dict[str, Any]) -> dict[str, str]:
+    """Update an existing cron job's trigger, instruction, and chat_id in-place."""
+    svc = _svc(request)
+    cron_expr = str(payload.get("cron_expression") or "").strip()
+    instruction = str(payload.get("instruction") or "").strip()
+    chat_id = str(payload.get("chat_id") or "").strip()
+    if not cron_expr or not instruction or not chat_id:
+        raise HTTPException(status_code=422, detail="cron_expression, instruction, chat_id 均为必填")
+    try:
+        svc.scheduler.update_cron_job(job_id, cron_expr, instruction, chat_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"status": "updated", "job_id": job_id}
+
+
 @router.delete("/api/cron_jobs/{job_id}")
 async def delete_cron_job(job_id: str, request: Request) -> dict[str, str]:
     """Delete a cron job by job_id."""

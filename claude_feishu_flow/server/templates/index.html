@@ -371,9 +371,14 @@
 
         <div class="max-w-3xl space-y-6">
 
-          <!-- 新建任务表单 -->
+          <!-- 新建/编辑任务表单 -->
           <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 space-y-4">
-            <h3 class="text-sm font-semibold text-amber-300 uppercase tracking-wider">新建定时任务</h3>
+            <div class="flex items-center justify-between">
+              <h3 class="text-sm font-semibold text-amber-300 uppercase tracking-wider">
+                {{ editingCronId ? '编辑定时任务' : '新建定时任务' }}
+              </h3>
+              <span v-if="editingCronId" class="text-xs text-gray-500 font-mono">ID: {{ editingCronId }}</span>
+            </div>
             <div class="grid grid-cols-2 gap-4">
               <div>
                 <label class="block text-xs text-gray-400 mb-1">Cron 表达式</label>
@@ -392,10 +397,14 @@
                 placeholder="例如：汇总目前所有 Running 的实验状态并发送飞书"
                 class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-amber-500 resize-none"></textarea>
             </div>
-            <div class="flex items-center gap-4">
-              <button @click="addCronJob"
+            <div class="flex items-center gap-3">
+              <button @click="saveCronJob"
                 class="px-5 py-2 rounded bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium transition-colors">
-                添加任务
+                {{ editingCronId ? '保存修改' : '添加任务' }}
+              </button>
+              <button v-if="editingCronId" @click="cancelEditCronJob"
+                class="px-4 py-2 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm transition-colors">
+                取消
               </button>
               <span v-if="cronMsg" :class="cronMsg.includes('失败') || cronMsg.includes('请填') ? 'text-red-400' : 'text-green-400'"
                 class="text-sm">{{ cronMsg }}</span>
@@ -420,12 +429,17 @@
               </thead>
               <tbody>
                 <tr v-for="job in cronJobs" :key="job.job_id"
-                  class="border-t border-gray-800 hover:bg-gray-900 transition-colors">
+                  :class="['border-t border-gray-800 transition-colors',
+                           editingCronId === job.job_id ? 'bg-amber-950' : 'hover:bg-gray-900']">
                   <td class="px-4 py-3 font-mono text-xs text-gray-400">{{ job.job_id }}</td>
                   <td class="px-4 py-3 font-mono text-xs text-amber-300">{{ job.cron_expression }}</td>
                   <td class="px-4 py-3 text-gray-200 max-w-xs truncate" :title="job.task_description">{{ job.task_description }}</td>
                   <td class="px-4 py-3 text-xs text-gray-400">{{ job.next_run_time }}</td>
-                  <td class="px-4 py-3 text-center">
+                  <td class="px-4 py-3 text-center flex items-center justify-center gap-2">
+                    <button @click="startEditCronJob(job)"
+                      class="text-xs px-2 py-1 rounded bg-amber-900 hover:bg-amber-700 text-amber-200 transition-colors">
+                      编辑
+                    </button>
                     <button @click="deleteCronJob(job.job_id)"
                       class="text-xs px-2 py-1 rounded bg-red-900 hover:bg-red-700 text-red-200 transition-colors">
                       删除
@@ -453,8 +467,8 @@
           { id: 'dashboard', label: '实验大盘' },
           { id: 'logs', label: '实时日志监控' },
           { id: 'history', label: 'AI 交互追踪' },
+          { id: 'crons', label: '定时任务' },
           { id: 'settings', label: '系统设置' },
-          { id: 'crons', label: '⏰ 定时任务' },
         ];
 
         const toast = ref('');
@@ -494,6 +508,7 @@
         const newCronInstruction = ref('');
         const newCronChatId = ref('');
         const cronMsg = ref('');
+        const editingCronId = ref('');  // non-empty = edit mode
 
         // ── computed ─────────────────────────────────────────────────────────
         const mainChatIds = computed(() => Object.keys(histories.value.main_agent));
@@ -654,15 +669,36 @@
           if (data) cronJobs.value = data;
         }
 
-        async function addCronJob() {
+        function startEditCronJob(job) {
+          editingCronId.value = job.job_id;
+          newCronExpr.value = job.cron_expression;
+          newCronInstruction.value = job.task_description;
+          newCronChatId.value = job.chat_id;
+          cronMsg.value = '';
+        }
+
+        function cancelEditCronJob() {
+          editingCronId.value = '';
+          newCronExpr.value = '';
+          newCronInstruction.value = '';
+          newCronChatId.value = '';
+          cronMsg.value = '';
+        }
+
+        async function saveCronJob() {
           cronMsg.value = '';
           if (!newCronExpr.value.trim() || !newCronInstruction.value.trim() || !newCronChatId.value.trim()) {
             cronMsg.value = '请填写所有必填字段';
             return;
           }
+          const isEdit = !!editingCronId.value;
+          const url = isEdit
+            ? `/api/cron_jobs/${encodeURIComponent(editingCronId.value)}`
+            : '/api/cron_jobs';
+          const method = isEdit ? 'PUT' : 'POST';
           try {
-            const res = await fetch('/api/cron_jobs', {
-              method: 'POST',
+            const res = await fetch(url, {
+              method,
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 cron_expression: newCronExpr.value.trim(),
@@ -674,13 +710,11 @@
               const err = await res.json().catch(() => ({}));
               throw new Error(err.detail || `HTTP ${res.status}`);
             }
-            cronMsg.value = '添加成功 ✓';
-            newCronExpr.value = '';
-            newCronInstruction.value = '';
-            newCronChatId.value = '';
+            cronMsg.value = isEdit ? '更新成功 ✓' : '添加成功 ✓';
+            cancelEditCronJob();
             await fetchCronJobs();
           } catch (e) {
-            cronMsg.value = `添加失败: ${e.message}`;
+            cronMsg.value = `${isEdit ? '更新' : '添加'}失败: ${e.message}`;
           }
         }
 
@@ -692,6 +726,7 @@
               const err = await res.json().catch(() => ({}));
               throw new Error(err.detail || `HTTP ${res.status}`);
             }
+            if (editingCronId.value === jobId) cancelEditCronJob();
             cronMsg.value = '删除成功 ✓';
             await fetchCronJobs();
           } catch (e) {
@@ -761,7 +796,8 @@
           settings, settingsLoading, settingsSaving, settingsMsg,
           loadSettings, saveSettings,
           cronJobs, newCronExpr, newCronInstruction, newCronChatId, cronMsg,
-          fetchCronJobs, addCronJob, deleteCronJob,
+          editingCronId, saveCronJob, startEditCronJob, cancelEditCronJob,
+          fetchCronJobs, deleteCronJob,
         };
       }
     }).mount('#app');
