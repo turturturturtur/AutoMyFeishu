@@ -586,6 +586,19 @@ class KimiClient:
                         )
                     messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
 
+                elif tool_name == "import_local_repo":
+                    if not open_id or svc is None:
+                        result_text = "❌ 导入失败：缺少用户身份信息（open_id 或 svc 缺失）。"
+                    else:
+                        from .tools import handle_import_local_repo
+                        result_text = await handle_import_local_repo(
+                            source_path=tool_input.get("source_path", ""),
+                            target_name=tool_input.get("target_name", ""),
+                            storage_base_dir=svc.config.resolved_storage_dir(),
+                            open_id=open_id,
+                        )
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+
                 else:
                     messages.append({
                         "role": "tool",

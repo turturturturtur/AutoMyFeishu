@@ -392,6 +392,29 @@ WRITE_BITABLE_TOOL: dict = {
     },
 }
 
+IMPORT_LOCAL_REPO_TOOL: dict = {
+    "name": "import_local_repo",
+    "description": (
+        "当用户提供了一个不在 Storage 目录下的宿主机绝对路径仓库，并要求进行实验时，"
+        "必须先调用此工具将其导入到用户的私有 Storage 中。"
+        "导入成功后，再调用 launch_experiment 并将导入的仓库名作为 base_repo 参数传入。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "source_path": {
+                "type": "string",
+                "description": "原仓库的宿主机绝对路径，例如 /home/user/my_project。",
+            },
+            "target_name": {
+                "type": "string",
+                "description": "导入到 Storage 后的仓库名称（可选）。如果不填，则默认使用原文件夹名。",
+            },
+        },
+        "required": ["source_path"],
+    },
+}
+
 MAIN_AGENT_TOOLS: list[dict] = [
     EXECUTE_BASH_TOOL,
     LIST_EXPERIMENTS_TOOL,
@@ -405,6 +428,7 @@ MAIN_AGENT_TOOLS: list[dict] = [
     WRITE_DOCUMENT_TOOL,
     RENAME_EXPERIMENT_TOOL,
     WRITE_BITABLE_TOOL,
+    IMPORT_LOCAL_REPO_TOOL,
 ]
 
 
@@ -966,3 +990,48 @@ async def handle_write_bitable(
         return f"❌ 写入记录失败：{exc}"
 
     return f"✅ 成功向多维表格的 [{table_name}] 数据表中写入了测试记录！"
+
+
+# ---------------------------------------------------------------------------
+# import_local_repo handler
+# ---------------------------------------------------------------------------
+
+
+async def handle_import_local_repo(
+    source_path: str,
+    target_name: str,
+    storage_base_dir: Path,
+    open_id: str,
+) -> str:
+    """Copy a host-machine repository into the user's private Storage directory.
+
+    The copy uses symlinks=True to prevent dereferencing large dataset symlinks.
+
+    Args:
+        source_path:      Absolute path to the source repository on the host.
+        target_name:      Optional name for the imported repo; defaults to source folder name.
+        storage_base_dir: The Storage root (config.resolved_storage_dir()).
+        open_id:          The user's Feishu open_id (for Storage/<open_id>/<repo_name>/).
+
+    Returns:
+        A human-readable status string describing the result.
+    """
+    import shutil as _shutil
+
+    src = Path(source_path)
+    if not src.exists() or not src.is_dir():
+        return f"❌ 导入失败：路径 '{source_path}' 不存在或不是一个目录。"
+
+    repo_name = target_name.strip() if target_name and target_name.strip() else src.name
+    dest_path = storage_base_dir / open_id / repo_name
+
+    if dest_path.exists():
+        return (
+            f"ℹ️ 仓库已存在于您的私有 Storage 中，可直接使用 base_repo='{repo_name}'。"
+        )
+
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(
+        _shutil.copytree, str(src), str(dest_path), symlinks=True
+    )
+    return f"✅ 仓库已成功导入到您的私有空间，名称为：{repo_name}"
