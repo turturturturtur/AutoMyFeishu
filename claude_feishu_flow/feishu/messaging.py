@@ -111,27 +111,35 @@ class Messaging:
         receive_id: str,
         image_key: str,
         receive_id_type: ReceiveIdType = "chat_id",
+        reply_message_id: str | None = None,
     ) -> str:
         """Send a Feishu image message using an already-uploaded image_key.
 
         Args:
-            receive_id:      Feishu chat_id or open_id.
-            image_key:       The image_key returned by FeishuClient.upload_image().
-            receive_id_type: "chat_id" | "open_id" etc.
+            receive_id:       Feishu chat_id or open_id.
+            image_key:        The image_key returned by FeishuClient.upload_image().
+            receive_id_type:  "chat_id" | "open_id" etc.
+            reply_message_id: If provided, sends as a reply to that message.
 
         Returns:
             Created message_id.
         """
-        payload = {
-            "receive_id": receive_id,
-            "msg_type": "image",
-            "content": json.dumps({"image_key": image_key}),
-        }
-        data = await self._client.post(
-            _SEND_MSG_PATH,
-            payload,
-            params={"receive_id_type": receive_id_type},
-        )
+        content = json.dumps({"image_key": image_key})
+        if reply_message_id:
+            path = f"/im/v1/messages/{reply_message_id}/reply"
+            payload: dict = {"msg_type": "image", "content": content}
+            data = await self._client.post(path, payload)
+        else:
+            payload = {
+                "receive_id": receive_id,
+                "msg_type": "image",
+                "content": content,
+            }
+            data = await self._client.post(
+                _SEND_MSG_PATH,
+                payload,
+                params={"receive_id_type": receive_id_type},
+            )
         msg_id: str = data["data"]["message_id"]
         logger.info("send_image message_id=%s", msg_id)
         return msg_id

@@ -625,7 +625,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                 try:
                     image_bytes = Path(result.plot_path).read_bytes()
                     image_key = await svc.feishu.upload_image(image_bytes)
-                    await svc.messaging.send_image(chat_id, image_key)
+                    await svc.messaging.send_image(chat_id, image_key, reply_message_id=event.message_id)
                     logger.info("Sent plot image for %s", result.plot_path)
                 except Exception as exc:
                     logger.warning("Failed to send plot image %s: %s", result.plot_path, exc)

@@ -121,6 +121,9 @@ class FeishuClient:
         token = await self._token_manager.get_token()
         url = f"{self._base_url}/im/v1/images"
         headers = {"Authorization": f"Bearer {token}"}
+        # Must NOT include Content-Type — httpx auto-sets multipart/form-data; boundary=...
+        headers.pop("Content-Type", None)
+        headers.pop("content-type", None)
         files = {"image": ("plot.png", image_bytes, "image/png")}
         data = {"image_type": "message"}
         logger.debug("POST upload_image to %s", url)
