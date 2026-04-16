@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,7 +8,10 @@
   <script src="/static/tailwind.min.js"></script>
   <script src="/static/vue.global.prod.js"></script>
   <style>
-    [v-cloak] { display: none; }
+    [v-cloak] {
+      display: none;
+    }
+
     .log-box {
       font-family: 'Menlo', 'Monaco', 'Consolas', monospace;
       font-size: 0.78rem;
@@ -17,604 +21,751 @@
       overflow-y: auto;
       max-height: calc(100vh - 260px);
     }
+
     .chat-box {
       overflow-y: auto;
       max-height: calc(100vh - 280px);
     }
+
     .pulse-dot {
-      animation: pulse 1.4s cubic-bezier(0.4,0,0.6,1) infinite;
+      animation: pulse 1.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
     }
+
     @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: .4; }
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: .4;
+      }
     }
   </style>
 </head>
+
 <body class="bg-gray-950 text-gray-100 min-h-screen">
-<div id="app" v-cloak>
+  <div id="app" v-cloak>
 
-  <!-- ── Toast ─────────────────────────────────────────────────────────── -->
-  <transition name="fade">
-    <div v-if="toast"
-         class="fixed top-4 right-4 z-50 bg-red-700 text-white text-sm px-4 py-2 rounded shadow-lg">
-      {{ toast }}
-    </div>
-  </transition>
+    <!-- ── Toast ─────────────────────────────────────────────────────────── -->
+    <transition name="fade">
+      <div v-if="toast" class="fixed top-4 right-4 z-50 bg-red-700 text-white text-sm px-4 py-2 rounded shadow-lg">
+        {{ toast }}
+      </div>
+    </transition>
 
-  <!-- ── Header ────────────────────────────────────────────────────────── -->
-  <header class="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center gap-3">
-    <span class="text-xl font-bold tracking-tight text-indigo-400">AutoMyFeishu</span>
-    <span class="text-gray-500 text-sm">Dashboard</span>
-    <span class="ml-auto flex items-center gap-4">
-      <span id="token-stats" class="text-xs text-yellow-500 font-mono">🪙 In: -- | Out: --</span>
-      <span class="text-xs text-gray-600">{{ nowStr }}</span>
-    </span>
-  </header>
+    <!-- ── Header ────────────────────────────────────────────────────────── -->
+    <header class="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center gap-3">
+      <span class="text-xl font-bold tracking-tight text-indigo-400">AutoMyFeishu</span>
+      <span class="text-gray-500 text-sm">Dashboard</span>
+      <span class="ml-auto flex items-center gap-4">
+        <span id="token-stats" class="text-xs text-yellow-500 font-mono">🪙 In: -- | Out: --</span>
+        <span class="text-xs text-gray-600">{{ nowStr }}</span>
+      </span>
+    </header>
 
-  <!-- ── Tabs ──────────────────────────────────────────────────────────── -->
-  <nav class="bg-gray-900 border-b border-gray-800 px-6 flex gap-1 pt-1">
-    <button v-for="tab in tabs" :key="tab.id"
-            @click="activeTab = tab.id"
-            :class="['px-4 py-2 text-sm font-medium rounded-t transition-colors',
+    <!-- ── Tabs ──────────────────────────────────────────────────────────── -->
+    <nav class="bg-gray-900 border-b border-gray-800 px-6 flex gap-1 pt-1">
+      <button v-for="tab in tabs" :key="tab.id" @click="activeTab = tab.id" :class="['px-4 py-2 text-sm font-medium rounded-t transition-colors',
                      activeTab === tab.id
                        ? 'bg-gray-950 text-indigo-400 border-t border-l border-r border-gray-700'
                        : 'text-gray-400 hover:text-gray-200']">
-      {{ tab.label }}
-    </button>
-  </nav>
+        {{ tab.label }}
+      </button>
+    </nav>
 
-  <!-- ── Main content ──────────────────────────────────────────────────── -->
-  <main class="p-6">
+    <!-- ── Main content ──────────────────────────────────────────────────── -->
+    <main class="p-6">
 
-    <!-- ══ Tab 1: 实验大盘 ════════════════════════════════════════════════ -->
-    <section v-if="activeTab === 'dashboard'">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold text-gray-200">实验大盘</h2>
-        <span class="text-xs text-gray-500">每 5 秒自动刷新</span>
-      </div>
+      <!-- ══ Tab 1: 实验大盘 ════════════════════════════════════════════════ -->
+      <section v-if="activeTab === 'dashboard'">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-lg font-semibold text-gray-200">实验大盘</h2>
+          <span class="text-xs text-gray-500">每 5 秒自动刷新</span>
+        </div>
 
-      <div v-if="experiments.length === 0" class="text-center text-gray-600 py-16">
-        暂无实验数据
-      </div>
+        <div v-if="experiments.length === 0" class="text-center text-gray-600 py-16">
+          暂无实验数据
+        </div>
 
-      <div v-else class="overflow-x-auto rounded-lg border border-gray-800">
-        <table class="w-full text-sm">
-          <thead>
-            <tr class="bg-gray-900 text-gray-400 text-xs uppercase tracking-wider">
-              <th class="px-4 py-3 text-left">别名 / ID</th>
-              <th class="px-4 py-3 text-left">状态</th>
-              <th class="px-4 py-3 text-left">创建时间</th>
-              <th class="px-4 py-3 text-center">计划</th>
-              <th class="px-4 py-3 text-center">脚本</th>
-              <th class="px-4 py-3 text-center">审阅</th>
-              <th class="px-4 py-3 text-center">摘要</th>
-              <th class="px-4 py-3 text-center">日志</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="exp in experiments" :key="exp.task_id"
+        <div v-else class="overflow-x-auto rounded-lg border border-gray-800">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="bg-gray-900 text-gray-400 text-xs uppercase tracking-wider">
+                <th class="px-4 py-3 text-left">别名 / ID</th>
+                <th class="px-4 py-3 text-left">状态</th>
+                <th class="px-4 py-3 text-left">创建时间</th>
+                <th class="px-4 py-3 text-center">计划</th>
+                <th class="px-4 py-3 text-center">脚本</th>
+                <th class="px-4 py-3 text-center">审阅</th>
+                <th class="px-4 py-3 text-center">摘要</th>
+                <th class="px-4 py-3 text-center">日志</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="exp in experiments" :key="exp.task_id"
                 class="border-t border-gray-800 hover:bg-gray-900 transition-colors">
-              <td class="px-4 py-3">
-                <div class="font-medium text-gray-200">{{ exp.alias !== exp.task_id ? exp.alias : '' }}</div>
-                <div class="text-xs text-gray-500 font-mono">{{ exp.task_id }}</div>
-              </td>
-              <td class="px-4 py-3">
-                <span :class="statusBadge(exp.status)" class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium">
-                  <span v-if="exp.status === 'Running'" class="w-1.5 h-1.5 rounded-full bg-blue-400 pulse-dot"></span>
-                  {{ exp.status }}
-                </span>
-              </td>
-              <td class="px-4 py-3 text-xs text-gray-400">{{ fmtTime(exp.created_at) }}</td>
-              <td class="px-4 py-3 text-center">
-                <span :class="exp.has_plan ? 'text-green-400' : 'text-gray-700'">{{ exp.has_plan ? '✓' : '–' }}</span>
-              </td>
-              <td class="px-4 py-3 text-center">
-                <span :class="exp.has_script ? 'text-green-400' : 'text-gray-700'">{{ exp.has_script ? '✓' : '–' }}</span>
-              </td>
-              <td class="px-4 py-3 text-center">
-                <span :class="exp.has_review ? 'text-green-400' : 'text-gray-700'">{{ exp.has_review ? '✓' : '–' }}</span>
-              </td>
-              <td class="px-4 py-3 text-center">
-                <span :class="exp.has_summary ? 'text-green-400' : 'text-gray-700'">{{ exp.has_summary ? '✓' : '–' }}</span>
-              </td>
-              <td class="px-4 py-3 text-center">
-                <button @click="openLogs(exp.task_id)"
-                        class="text-xs px-2 py-1 rounded bg-indigo-800 hover:bg-indigo-700 text-indigo-200 transition-colors">
-                  查看
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- ══ Tab 2: 实时日志监控 ════════════════════════════════════════════ -->
-    <section v-if="activeTab === 'logs'">
-      <div class="flex items-center gap-4 mb-4">
-        <h2 class="text-lg font-semibold text-gray-200">实时日志监控</h2>
-        <select v-model="selectedLogExp"
-                class="bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500">
-          <option value="">-- 选择实验 --</option>
-          <option v-for="exp in experiments" :key="exp.task_id" :value="exp.task_id">
-            {{ exp.alias !== exp.task_id ? exp.alias + ' · ' : '' }}{{ exp.task_id }}
-          </option>
-        </select>
-        <span v-if="selectedLogExpStatus === 'Running'"
-              class="inline-flex items-center gap-1.5 text-xs text-blue-400">
-          <span class="w-1.5 h-1.5 rounded-full bg-blue-400 pulse-dot"></span>
-          运行中 · 每 3 秒刷新
-        </span>
-        <span v-else-if="selectedLogExp" class="text-xs text-gray-500">每 10 秒刷新</span>
-      </div>
-
-      <div v-if="!selectedLogExp" class="text-center text-gray-600 py-16">请先选择一个实验</div>
-
-      <div v-else class="grid grid-cols-2 gap-4">
-        <!-- run.log -->
-        <div class="flex flex-col">
-          <div class="text-xs font-semibold text-gray-400 mb-1 flex items-center gap-2">
-            <span class="text-green-400">stdout</span> run.log
-          </div>
-          <div ref="runLogBox"
-               class="log-box bg-gray-900 border border-gray-800 rounded-lg p-3 text-gray-300">{{ logs.run_log || '（空）' }}</div>
+                <td class="px-4 py-3">
+                  <div class="font-medium text-gray-200">{{ exp.alias !== exp.task_id ? exp.alias : '' }}</div>
+                  <div class="text-xs text-gray-500 font-mono">{{ exp.task_id }}</div>
+                </td>
+                <td class="px-4 py-3">
+                  <span :class="statusBadge(exp.status)"
+                    class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium">
+                    <span v-if="exp.status === 'Running'" class="w-1.5 h-1.5 rounded-full bg-blue-400 pulse-dot"></span>
+                    {{ exp.status }}
+                  </span>
+                </td>
+                <td class="px-4 py-3 text-xs text-gray-400">{{ fmtTime(exp.created_at) }}</td>
+                <td class="px-4 py-3 text-center">
+                  <span :class="exp.has_plan ? 'text-green-400' : 'text-gray-700'">{{ exp.has_plan ? '✓' : '–' }}</span>
+                </td>
+                <td class="px-4 py-3 text-center">
+                  <span :class="exp.has_script ? 'text-green-400' : 'text-gray-700'">{{ exp.has_script ? '✓' : '–'
+                    }}</span>
+                </td>
+                <td class="px-4 py-3 text-center">
+                  <span :class="exp.has_review ? 'text-green-400' : 'text-gray-700'">{{ exp.has_review ? '✓' : '–'
+                    }}</span>
+                </td>
+                <td class="px-4 py-3 text-center">
+                  <span :class="exp.has_summary ? 'text-green-400' : 'text-gray-700'">{{ exp.has_summary ? '✓' : '–'
+                    }}</span>
+                </td>
+                <td class="px-4 py-3 text-center">
+                  <button @click="openLogs(exp.task_id)"
+                    class="text-xs px-2 py-1 rounded bg-indigo-800 hover:bg-indigo-700 text-indigo-200 transition-colors">
+                    查看
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-        <!-- error.log -->
-        <div class="flex flex-col">
-          <div class="text-xs font-semibold text-gray-400 mb-1 flex items-center gap-2">
-            <span class="text-red-400">stderr</span> error.log
-          </div>
-          <div ref="errLogBox"
-               class="log-box bg-gray-950 border border-red-900 rounded-lg p-3 text-red-300">{{ logs.error_log || '（空）' }}</div>
+      </section>
+
+      <!-- ══ Tab 2: 实时日志监控 ════════════════════════════════════════════ -->
+      <section v-if="activeTab === 'logs'">
+        <div class="flex items-center gap-4 mb-4">
+          <h2 class="text-lg font-semibold text-gray-200">实时日志监控</h2>
+          <select v-model="selectedLogExp"
+            class="bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+            <option value="">-- 选择实验 --</option>
+            <option v-for="exp in experiments" :key="exp.task_id" :value="exp.task_id">
+              {{ exp.alias !== exp.task_id ? exp.alias + ' · ' : '' }}{{ exp.task_id }}
+            </option>
+          </select>
+          <span v-if="selectedLogExpStatus === 'Running'"
+            class="inline-flex items-center gap-1.5 text-xs text-blue-400">
+            <span class="w-1.5 h-1.5 rounded-full bg-blue-400 pulse-dot"></span>
+            运行中 · 每 3 秒刷新
+          </span>
+          <span v-else-if="selectedLogExp" class="text-xs text-gray-500">每 10 秒刷新</span>
         </div>
-      </div>
-    </section>
 
-    <!-- ══ Tab 3: AI 交互追踪 ═════════════════════════════════════════════ -->
-    <section v-if="activeTab === 'history'">
-      <div class="flex items-center gap-4 mb-4 flex-wrap">
-        <h2 class="text-lg font-semibold text-gray-200">AI 交互追踪</h2>
-        <span class="text-xs text-gray-500">每 10 秒自动刷新</span>
-      </div>
+        <div v-if="!selectedLogExp" class="text-center text-gray-600 py-16">请先选择一个实验</div>
 
-      <div class="grid grid-cols-2 gap-6">
-        <!-- Main Agent -->
-        <div>
-          <div class="flex items-center gap-3 mb-2">
-            <span class="text-sm font-semibold text-indigo-300">Main Agent</span>
-            <select v-model="selectedMainChat"
-                    class="flex-1 bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500">
-              <option value="">-- 选择 Chat --</option>
-              <option v-for="id in mainChatIds" :key="id" :value="id">{{ id }}</option>
-            </select>
+        <div v-else class="grid grid-cols-2 gap-4">
+          <!-- run.log -->
+          <div class="flex flex-col">
+            <div class="text-xs font-semibold text-gray-400 mb-1 flex items-center gap-2">
+              <span class="text-green-400">stdout</span> run.log
+            </div>
+            <div ref="runLogBox" class="log-box bg-gray-900 border border-gray-800 rounded-lg p-3 text-gray-300">{{
+              logs.run_log || '（空）' }}</div>
           </div>
-          <div ref="mainChatBox" class="chat-box bg-gray-900 border border-gray-800 rounded-lg p-3 space-y-2">
-            <template v-if="!selectedMainChat">
-              <p class="text-center text-gray-600 text-sm py-8">请选择一个 Chat ID</p>
-            </template>
-            <template v-else-if="mainMessages.length === 0">
-              <p class="text-center text-gray-600 text-sm py-8">暂无历史</p>
-            </template>
-            <template v-else>
-              <div v-for="(msg, i) in mainMessages" :key="i"
-                   :class="['flex', msg.role === 'user' ? 'justify-end' : 'justify-start']">
-                <div :class="['max-w-xs lg:max-w-md xl:max-w-lg rounded-2xl px-3 py-2 text-sm break-words',
+          <!-- error.log -->
+          <div class="flex flex-col">
+            <div class="text-xs font-semibold text-gray-400 mb-1 flex items-center gap-2">
+              <span class="text-red-400">stderr</span> error.log
+            </div>
+            <div ref="errLogBox" class="log-box bg-gray-950 border border-red-900 rounded-lg p-3 text-red-300">{{
+              logs.error_log || '（空）' }}</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ Tab 3: AI 交互追踪 ═════════════════════════════════════════════ -->
+      <section v-if="activeTab === 'history'">
+        <div class="flex items-center gap-4 mb-4 flex-wrap">
+          <h2 class="text-lg font-semibold text-gray-200">AI 交互追踪</h2>
+          <span class="text-xs text-gray-500">每 10 秒自动刷新</span>
+        </div>
+
+        <div class="grid grid-cols-2 gap-6">
+          <!-- Main Agent -->
+          <div>
+            <div class="flex items-center gap-3 mb-2">
+              <span class="text-sm font-semibold text-indigo-300">Main Agent</span>
+              <select v-model="selectedMainChat"
+                class="flex-1 bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                <option value="">-- 选择 Chat --</option>
+                <option v-for="id in mainChatIds" :key="id" :value="id">{{ id }}</option>
+              </select>
+            </div>
+            <div ref="mainChatBox" class="chat-box bg-gray-900 border border-gray-800 rounded-lg p-3 space-y-2">
+              <template v-if="!selectedMainChat">
+                <p class="text-center text-gray-600 text-sm py-8">请选择一个 Chat ID</p>
+              </template>
+              <template v-else-if="mainMessages.length === 0">
+                <p class="text-center text-gray-600 text-sm py-8">暂无历史</p>
+              </template>
+              <template v-else>
+                <div v-for="(msg, i) in mainMessages" :key="i"
+                  :class="['flex', msg.role === 'user' ? 'justify-end' : 'justify-start']">
+                  <div :class="['max-w-xs lg:max-w-md xl:max-w-lg rounded-2xl px-3 py-2 text-sm break-words',
                                msg.role === 'user'
                                  ? 'bg-indigo-700 text-white rounded-br-sm'
                                  : 'bg-gray-800 text-gray-200 rounded-bl-sm']">
-                  <div class="text-xs opacity-60 mb-0.5">{{ msg.role }}</div>
-                  <div class="whitespace-pre-wrap">{{ msg.content }}</div>
+                    <div class="text-xs opacity-60 mb-0.5">{{ msg.role }}</div>
+                    <div class="whitespace-pre-wrap">{{ msg.content }}</div>
+                  </div>
                 </div>
-              </div>
-            </template>
+              </template>
+            </div>
           </div>
-        </div>
 
-        <!-- Sub Agent -->
-        <div>
-          <div class="flex items-center gap-3 mb-2">
-            <span class="text-sm font-semibold text-teal-300">Sub Agent</span>
-            <select v-model="selectedSubTask"
-                    class="flex-1 bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500">
-              <option value="">-- 选择实验 --</option>
-              <option v-for="id in subTaskIds" :key="id" :value="id">{{ id }}</option>
-            </select>
-          </div>
-          <div ref="subChatBox" class="chat-box bg-gray-900 border border-gray-800 rounded-lg p-3 space-y-2">
-            <template v-if="!selectedSubTask">
-              <p class="text-center text-gray-600 text-sm py-8">请选择一个实验 ID</p>
-            </template>
-            <template v-else-if="subMessages.length === 0">
-              <p class="text-center text-gray-600 text-sm py-8">暂无历史</p>
-            </template>
-            <template v-else>
-              <div v-for="(msg, i) in subMessages" :key="i"
-                   :class="['flex', msg.role === 'user' ? 'justify-end' : 'justify-start']">
-                <div :class="['max-w-xs lg:max-w-md xl:max-w-lg rounded-2xl px-3 py-2 text-sm break-words',
+          <!-- Sub Agent -->
+          <div>
+            <div class="flex items-center gap-3 mb-2">
+              <span class="text-sm font-semibold text-teal-300">Sub Agent</span>
+              <select v-model="selectedSubTask"
+                class="flex-1 bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                <option value="">-- 选择实验 --</option>
+                <option v-for="id in subTaskIds" :key="id" :value="id">{{ id }}</option>
+              </select>
+            </div>
+            <div ref="subChatBox" class="chat-box bg-gray-900 border border-gray-800 rounded-lg p-3 space-y-2">
+              <template v-if="!selectedSubTask">
+                <p class="text-center text-gray-600 text-sm py-8">请选择一个实验 ID</p>
+              </template>
+              <template v-else-if="subMessages.length === 0">
+                <p class="text-center text-gray-600 text-sm py-8">暂无历史</p>
+              </template>
+              <template v-else>
+                <div v-for="(msg, i) in subMessages" :key="i"
+                  :class="['flex', msg.role === 'user' ? 'justify-end' : 'justify-start']">
+                  <div :class="['max-w-xs lg:max-w-md xl:max-w-lg rounded-2xl px-3 py-2 text-sm break-words',
                                msg.role === 'user'
                                  ? 'bg-teal-700 text-white rounded-br-sm'
                                  : 'bg-gray-800 text-gray-200 rounded-bl-sm']">
-                  <div class="text-xs opacity-60 mb-0.5">{{ msg.role }}</div>
-                  <div class="whitespace-pre-wrap">{{ msg.content }}</div>
+                    <div class="text-xs opacity-60 mb-0.5">{{ msg.role }}</div>
+                    <div class="whitespace-pre-wrap">{{ msg.content }}</div>
+                  </div>
                 </div>
-              </div>
-            </template>
+              </template>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- ══ Tab 4: 系统设置 ═══════════════════════════════════════════════ -->
-    <section v-if="activeTab === 'settings'">
-      <div class="flex items-center justify-between mb-6">
-        <h2 class="text-lg font-semibold text-gray-200">系统设置</h2>
-        <button @click="loadSettings"
-                :disabled="settingsLoading"
-                class="text-xs px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors disabled:opacity-50">
-          {{ settingsLoading ? '加载中...' : '重新加载' }}
-        </button>
-      </div>
-
-      <div class="max-w-2xl space-y-6">
-
-        <!-- LLM Provider -->
-        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 space-y-4">
-          <h3 class="text-sm font-semibold text-indigo-300 uppercase tracking-wider">LLM 提供商</h3>
-          <div>
-            <label class="block text-xs text-gray-400 mb-1">Provider</label>
-            <select v-model="settings.llm_provider"
-                    class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500">
-              <option value="anthropic">Anthropic (Claude)</option>
-              <option value="kimi">Kimi (Moonshot AI)</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- Anthropic Settings -->
-        <div v-if="settings.llm_provider === 'anthropic'"
-             class="bg-gray-900 border border-gray-800 rounded-lg p-5 space-y-4">
-          <h3 class="text-sm font-semibold text-indigo-300 uppercase tracking-wider">Anthropic / Claude</h3>
-          <div>
-            <label class="block text-xs text-gray-400 mb-1">
-              API Key
-              <span class="text-gray-600 font-normal ml-1">(留空则不更新)</span>
-            </label>
-            <input v-model="settings.anthropic_api_key" type="password"
-                   placeholder="sk-ant-..."
-                   class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono" />
-          </div>
-          <div>
-            <label class="block text-xs text-gray-400 mb-1">Model</label>
-            <input v-model="settings.anthropic_model" type="text"
-                   placeholder="claude-3-5-sonnet-latest"
-                   class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono" />
-          </div>
-          <div>
-            <label class="block text-xs text-gray-400 mb-1">
-              Base URL
-              <span class="text-gray-600 font-normal ml-1">(可选，留空使用官方 API)</span>
-            </label>
-            <input v-model="settings.anthropic_base_url" type="text"
-                   placeholder="https://your-proxy.example.com/v1"
-                   class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono" />
-          </div>
-        </div>
-
-        <!-- Kimi Settings -->
-        <div v-if="settings.llm_provider === 'kimi'"
-             class="bg-gray-900 border border-gray-800 rounded-lg p-5 space-y-4">
-          <h3 class="text-sm font-semibold text-teal-300 uppercase tracking-wider">Kimi / Moonshot AI</h3>
-          <div>
-            <label class="block text-xs text-gray-400 mb-1">
-              API Key
-              <span class="text-gray-600 font-normal ml-1">(留空则不更新)</span>
-            </label>
-            <input v-model="settings.kimi_api_key" type="password"
-                   placeholder="sk-..."
-                   class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono" />
-          </div>
-          <div>
-            <label class="block text-xs text-gray-400 mb-1">Model</label>
-            <input v-model="settings.kimi_model" type="text"
-                   placeholder="moonshot-v1-32k"
-                   class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono" />
-          </div>
-        </div>
-
-        <!-- General Settings -->
-        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 space-y-4">
-          <h3 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">通用设置</h3>
-          <div>
-            <label class="block text-xs text-gray-400 mb-1">
-              默认最大重试次数
-              <span class="text-gray-600 font-normal ml-1">(default_max_retries)</span>
-            </label>
-            <input v-model.number="settings.default_max_retries" type="number" min="0" max="20"
-                   class="w-32 bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
-          </div>
-        </div>
-
-        <!-- Save Button + Feedback -->
-        <div class="flex items-center gap-4">
-          <button @click="saveSettings"
-                  :disabled="settingsSaving"
-                  class="px-5 py-2 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors disabled:opacity-50">
-            {{ settingsSaving ? '保存中...' : '保存设置' }}
+      <!-- ══ Tab 4: 系统设置 ═══════════════════════════════════════════════ -->
+      <section v-if="activeTab === 'settings'">
+        <div class="flex items-center justify-between mb-6">
+          <h2 class="text-lg font-semibold text-gray-200">系统设置</h2>
+          <button @click="loadSettings" :disabled="settingsLoading"
+            class="text-xs px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors disabled:opacity-50">
+            {{ settingsLoading ? '加载中...' : '重新加载' }}
           </button>
-          <span v-if="settingsMsg"
-                :class="settingsMsg.startsWith('保存成功') ? 'text-green-400' : 'text-red-400'"
-                class="text-sm">
-            {{ settingsMsg }}
-          </span>
         </div>
 
-      </div>
-    </section>
+        <div class="max-w-2xl space-y-6">
 
-  </main>
-</div>
+          <!-- LLM Provider -->
+          <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 space-y-4">
+            <h3 class="text-sm font-semibold text-indigo-300 uppercase tracking-wider">LLM 提供商</h3>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Provider</label>
+              <select v-model="settings.llm_provider"
+                class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                <option value="anthropic">Anthropic (Claude)</option>
+                <option value="kimi">Kimi (Moonshot AI)</option>
+              </select>
+            </div>
+          </div>
 
-<script>
-const { createApp, ref, computed, onMounted, onUnmounted, watch, nextTick } = Vue;
+          <!-- Anthropic Settings -->
+          <div v-if="settings.llm_provider === 'anthropic'"
+            class="bg-gray-900 border border-gray-800 rounded-lg p-5 space-y-4">
+            <h3 class="text-sm font-semibold text-indigo-300 uppercase tracking-wider">Anthropic / Claude</h3>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">
+                API Key
+                <span class="text-gray-600 font-normal ml-1">(留空则不更新)</span>
+              </label>
+              <input v-model="settings.anthropic_api_key" type="password" placeholder="sk-ant-..."
+                class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono" />
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Model</label>
+              <input v-model="settings.anthropic_model" type="text" placeholder="claude-3-5-sonnet-latest"
+                class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono" />
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">
+                Base URL
+                <span class="text-gray-600 font-normal ml-1">(可选，留空使用官方 API)</span>
+              </label>
+              <input v-model="settings.anthropic_base_url" type="text" placeholder="https://your-proxy.example.com/v1"
+                class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono" />
+            </div>
+          </div>
 
-createApp({
-  setup() {
-    // ── state ────────────────────────────────────────────────────────────
-    const activeTab = ref('dashboard');
-    const tabs = [
-      { id: 'dashboard', label: '实验大盘' },
-      { id: 'logs',      label: '实时日志监控' },
-      { id: 'history',   label: 'AI 交互追踪' },
-      { id: 'settings',  label: '⚙️ 系统设置' },
-    ];
+          <!-- Kimi Settings -->
+          <div v-if="settings.llm_provider === 'kimi'"
+            class="bg-gray-900 border border-gray-800 rounded-lg p-5 space-y-4">
+            <h3 class="text-sm font-semibold text-teal-300 uppercase tracking-wider">Kimi / Moonshot AI</h3>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">
+                API Key
+                <span class="text-gray-600 font-normal ml-1">(留空则不更新)</span>
+              </label>
+              <input v-model="settings.kimi_api_key" type="password" placeholder="sk-..."
+                class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono" />
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Model</label>
+              <input v-model="settings.kimi_model" type="text" placeholder="moonshot-v1-32k"
+                class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono" />
+            </div>
+          </div>
 
-    const toast = ref('');
-    const nowStr = ref('');
+          <!-- General Settings -->
+          <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 space-y-4">
+            <h3 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">通用设置</h3>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">
+                默认最大重试次数
+                <span class="text-gray-600 font-normal ml-1">(default_max_retries)</span>
+              </label>
+              <input v-model.number="settings.default_max_retries" type="number" min="0" max="20"
+                class="w-32 bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+            </div>
+          </div>
 
-    const experiments = ref([]);
-    const selectedLogExp = ref('');
-    const logs = ref({ run_log: '', error_log: '' });
+          <!-- Save Button + Feedback -->
+          <div class="flex items-center gap-4">
+            <button @click="saveSettings" :disabled="settingsSaving"
+              class="px-5 py-2 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors disabled:opacity-50">
+              {{ settingsSaving ? '保存中...' : '保存设置' }}
+            </button>
+            <span v-if="settingsMsg" :class="settingsMsg.startsWith('保存成功') ? 'text-green-400' : 'text-red-400'"
+              class="text-sm">
+              {{ settingsMsg }}
+            </span>
+          </div>
 
-    const histories = ref({ main_agent: {}, sub_agent: {} });
-    const selectedMainChat = ref('');
-    const selectedSubTask = ref('');
+        </div>
+      </section>
 
-    // template refs for scroll containers
-    const runLogBox = ref(null);
-    const errLogBox = ref(null);
-    const mainChatBox = ref(null);
-    const subChatBox = ref(null);
+      <!-- ══ Tab 5: 定时任务 ════════════════════════════════════════════════ -->
+      <section v-if="activeTab === 'crons'">
+        <div class="flex items-center justify-between mb-6">
+          <h2 class="text-lg font-semibold text-gray-200">⏰ 定时任务</h2>
+          <button @click="fetchCronJobs"
+            class="text-xs px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">
+            刷新列表
+          </button>
+        </div>
 
-    // ── settings state ────────────────────────────────────────────────────
-    const settings = ref({
-      llm_provider: 'anthropic',
-      anthropic_api_key: '',
-      anthropic_model: 'claude-3-5-sonnet-latest',
-      anthropic_base_url: '',
-      kimi_api_key: '',
-      kimi_model: 'moonshot-v1-32k',
-      default_max_retries: 5,
-    });
-    const settingsLoading = ref(false);
-    const settingsSaving = ref(false);
-    const settingsMsg = ref('');
+        <div class="max-w-3xl space-y-6">
 
-    // ── computed ─────────────────────────────────────────────────────────
-    const mainChatIds = computed(() => Object.keys(histories.value.main_agent));
-    const subTaskIds  = computed(() => Object.keys(histories.value.sub_agent));
+          <!-- 新建任务表单 -->
+          <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 space-y-4">
+            <h3 class="text-sm font-semibold text-amber-300 uppercase tracking-wider">新建定时任务</h3>
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="block text-xs text-gray-400 mb-1">Cron 表达式</label>
+                <input v-model="newCronExpr" type="text" placeholder="0 9 * * *  (每天 9 点)"
+                  class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-amber-500 font-mono" />
+              </div>
+              <div>
+                <label class="block text-xs text-gray-400 mb-1">飞书 Chat ID</label>
+                <input v-model="newCronChatId" type="text" placeholder="oc_xxxxxxxxxxxx"
+                  class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-amber-500 font-mono" />
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">执行指令</label>
+              <textarea v-model="newCronInstruction" rows="3"
+                placeholder="例如：汇总目前所有 Running 的实验状态并发送飞书"
+                class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-amber-500 resize-none"></textarea>
+            </div>
+            <div class="flex items-center gap-4">
+              <button @click="addCronJob"
+                class="px-5 py-2 rounded bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium transition-colors">
+                添加任务
+              </button>
+              <span v-if="cronMsg" :class="cronMsg.includes('失败') || cronMsg.includes('请填') ? 'text-red-400' : 'text-green-400'"
+                class="text-sm">{{ cronMsg }}</span>
+            </div>
+          </div>
 
-    const mainMessages = computed(() =>
-      selectedMainChat.value ? (histories.value.main_agent[selectedMainChat.value] || []) : []
-    );
-    const subMessages = computed(() =>
-      selectedSubTask.value ? (histories.value.sub_agent[selectedSubTask.value] || []) : []
-    );
+          <!-- 任务列表 -->
+          <div class="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
+            <div class="px-5 py-3 border-b border-gray-800">
+              <h3 class="text-sm font-semibold text-gray-300">已注册任务（{{ cronJobs.length }}）</h3>
+            </div>
+            <div v-if="cronJobs.length === 0" class="text-center text-gray-600 py-10 text-sm">暂无定时任务</div>
+            <table v-else class="w-full text-sm">
+              <thead>
+                <tr class="bg-gray-900 text-gray-400 text-xs uppercase tracking-wider">
+                  <th class="px-4 py-3 text-left">Job ID</th>
+                  <th class="px-4 py-3 text-left">Cron 表达式</th>
+                  <th class="px-4 py-3 text-left">任务指令</th>
+                  <th class="px-4 py-3 text-left">下次执行时间</th>
+                  <th class="px-4 py-3 text-center">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="job in cronJobs" :key="job.job_id"
+                  class="border-t border-gray-800 hover:bg-gray-900 transition-colors">
+                  <td class="px-4 py-3 font-mono text-xs text-gray-400">{{ job.job_id }}</td>
+                  <td class="px-4 py-3 font-mono text-xs text-amber-300">{{ job.cron_expression }}</td>
+                  <td class="px-4 py-3 text-gray-200 max-w-xs truncate" :title="job.task_description">{{ job.task_description }}</td>
+                  <td class="px-4 py-3 text-xs text-gray-400">{{ job.next_run_time }}</td>
+                  <td class="px-4 py-3 text-center">
+                    <button @click="deleteCronJob(job.job_id)"
+                      class="text-xs px-2 py-1 rounded bg-red-900 hover:bg-red-700 text-red-200 transition-colors">
+                      删除
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
 
-    const selectedLogExpStatus = computed(() => {
-      const exp = experiments.value.find(e => e.task_id === selectedLogExp.value);
-      return exp ? exp.status : '';
-    });
+        </div>
+      </section>
 
-    // ── helpers ──────────────────────────────────────────────────────────
-    function showToast(msg) {
-      toast.value = msg;
-      setTimeout(() => { toast.value = ''; }, 4000);
-    }
+    </main>
+  </div>
 
-    function statusBadge(status) {
-      return {
-        Running: 'bg-blue-900 text-blue-300',
-        Done:    'bg-green-900 text-green-300',
-        Failed:  'bg-red-900 text-red-300',
-        Pending: 'bg-gray-800 text-gray-400',
-      }[status] || 'bg-gray-800 text-gray-400';
-    }
+  <script>
+    const { createApp, ref, computed, onMounted, onUnmounted, watch, nextTick } = Vue;
 
-    function fmtTime(iso) {
-      if (!iso) return '';
-      try {
-        return new Date(iso).toLocaleString('zh-CN', { hour12: false });
-      } catch { return iso; }
-    }
-
-    function updateClock() {
-      nowStr.value = new Date().toLocaleString('zh-CN', { hour12: false });
-    }
-
-    async function scrollToBottom(el) {
-      if (!el) return;
-      await nextTick();
-      el.scrollTop = el.scrollHeight;
-    }
-
-    // ── fetch helpers ─────────────────────────────────────────────────────
-    async function apiFetch(url) {
-      try {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return await res.json();
-      } catch (e) {
-        showToast(`请求失败: ${url} — ${e.message}`);
-        return null;
-      }
-    }
-
-    async function fetchExperiments() {
-      const data = await apiFetch('/api/experiments');
-      if (data) experiments.value = data;
-    }
-
-    async function fetchLogs() {
-      if (!selectedLogExp.value) return;
-      const data = await apiFetch(`/api/experiments/${selectedLogExp.value}/logs`);
-      if (data) {
-        logs.value = data;
-        await scrollToBottom(runLogBox.value);
-        await scrollToBottom(errLogBox.value);
-      }
-    }
-
-    async function fetchHistories() {
-      const data = await apiFetch('/api/histories');
-      if (data) histories.value = data;
-    }
-
-    function fmtTokens(n) {
-      if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-      if (n >= 1_000) return Math.round(n / 1_000) + 'K';
-      return String(n);
-    }
-
-    async function fetchSystemStats() {
-      const data = await apiFetch('/api/system_stats');
-      if (data) {
-        document.getElementById('token-stats').textContent =
-          `🪙 In: ${fmtTokens(data.input_tokens)} | Out: ${fmtTokens(data.output_tokens)}`;
-      }
-    }
-
-    // ── open logs from dashboard ─────────────────────────────────────────
-    function openLogs(taskId) {
-      selectedLogExp.value = taskId;
-      activeTab.value = 'logs';
-    }
-
-    // ── settings functions ────────────────────────────────────────────────
-    async function loadSettings() {
-      settingsLoading.value = true;
-      settingsMsg.value = '';
-      try {
-        const res = await fetch('/api/settings');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        const formFields = [
-          'llm_provider', 'anthropic_api_key', 'anthropic_model',
-          'anthropic_base_url', 'kimi_api_key', 'kimi_model', 'default_max_retries',
+    createApp({
+      setup() {
+        // ── state ────────────────────────────────────────────────────────────
+        const activeTab = ref('dashboard');
+        const tabs = [
+          { id: 'dashboard', label: '实验大盘' },
+          { id: 'logs', label: '实时日志监控' },
+          { id: 'history', label: 'AI 交互追踪' },
+          { id: 'settings', label: '系统设置' },
+          { id: 'crons', label: '⏰ 定时任务' },
         ];
-        for (const key of formFields) {
-          if (data[key] !== undefined) {
-            settings.value[key] = data[key] ?? '';
+
+        const toast = ref('');
+        const nowStr = ref('');
+
+        const experiments = ref([]);
+        const selectedLogExp = ref('');
+        const logs = ref({ run_log: '', error_log: '' });
+
+        const histories = ref({ main_agent: {}, sub_agent: {} });
+        const selectedMainChat = ref('');
+        const selectedSubTask = ref('');
+
+        // template refs for scroll containers
+        const runLogBox = ref(null);
+        const errLogBox = ref(null);
+        const mainChatBox = ref(null);
+        const subChatBox = ref(null);
+
+        // ── settings state ────────────────────────────────────────────────────
+        const settings = ref({
+          llm_provider: 'anthropic',
+          anthropic_api_key: '',
+          anthropic_model: 'claude-3-5-sonnet-latest',
+          anthropic_base_url: '',
+          kimi_api_key: '',
+          kimi_model: 'moonshot-v1-32k',
+          default_max_retries: 5,
+        });
+        const settingsLoading = ref(false);
+        const settingsSaving = ref(false);
+        const settingsMsg = ref('');
+
+        // ── cron state ────────────────────────────────────────────────────────
+        const cronJobs = ref([]);
+        const newCronExpr = ref('');
+        const newCronInstruction = ref('');
+        const newCronChatId = ref('');
+        const cronMsg = ref('');
+
+        // ── computed ─────────────────────────────────────────────────────────
+        const mainChatIds = computed(() => Object.keys(histories.value.main_agent));
+        const subTaskIds = computed(() => Object.keys(histories.value.sub_agent));
+
+        const mainMessages = computed(() =>
+          selectedMainChat.value ? (histories.value.main_agent[selectedMainChat.value] || []) : []
+        );
+        const subMessages = computed(() =>
+          selectedSubTask.value ? (histories.value.sub_agent[selectedSubTask.value] || []) : []
+        );
+
+        const selectedLogExpStatus = computed(() => {
+          const exp = experiments.value.find(e => e.task_id === selectedLogExp.value);
+          return exp ? exp.status : '';
+        });
+
+        // ── helpers ──────────────────────────────────────────────────────────
+        function showToast(msg) {
+          toast.value = msg;
+          setTimeout(() => { toast.value = ''; }, 4000);
+        }
+
+        function statusBadge(status) {
+          return {
+            Running: 'bg-blue-900 text-blue-300',
+            Done: 'bg-green-900 text-green-300',
+            Failed: 'bg-red-900 text-red-300',
+            Pending: 'bg-gray-800 text-gray-400',
+          }[status] || 'bg-gray-800 text-gray-400';
+        }
+
+        function fmtTime(iso) {
+          if (!iso) return '';
+          try {
+            return new Date(iso).toLocaleString('zh-CN', { hour12: false });
+          } catch { return iso; }
+        }
+
+        function updateClock() {
+          nowStr.value = new Date().toLocaleString('zh-CN', { hour12: false });
+        }
+
+        async function scrollToBottom(el) {
+          if (!el) return;
+          await nextTick();
+          el.scrollTop = el.scrollHeight;
+        }
+
+        // ── fetch helpers ─────────────────────────────────────────────────────
+        async function apiFetch(url) {
+          try {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return await res.json();
+          } catch (e) {
+            showToast(`请求失败: ${url} — ${e.message}`);
+            return null;
           }
         }
-      } catch (e) {
-        settingsMsg.value = `加载失败: ${e.message}`;
-      } finally {
-        settingsLoading.value = false;
-      }
-    }
 
-    async function saveSettings() {
-      settingsSaving.value = true;
-      settingsMsg.value = '';
-      try {
-        const res = await fetch('/api/settings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            llm_provider:        settings.value.llm_provider,
-            anthropic_api_key:   settings.value.anthropic_api_key,
-            anthropic_model:     settings.value.anthropic_model,
-            anthropic_base_url:  settings.value.anthropic_base_url || null,
-            kimi_api_key:        settings.value.kimi_api_key,
-            kimi_model:          settings.value.kimi_model,
-            default_max_retries: Number(settings.value.default_max_retries),
-          }),
+        async function fetchExperiments() {
+          const data = await apiFetch('/api/experiments');
+          if (data) experiments.value = data;
+        }
+
+        async function fetchLogs() {
+          if (!selectedLogExp.value) return;
+          const data = await apiFetch(`/api/experiments/${selectedLogExp.value}/logs`);
+          if (data) {
+            logs.value = data;
+            await scrollToBottom(runLogBox.value);
+            await scrollToBottom(errLogBox.value);
+          }
+        }
+
+        async function fetchHistories() {
+          const data = await apiFetch('/api/histories');
+          if (data) histories.value = data;
+        }
+
+        function fmtTokens(n) {
+          if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+          if (n >= 1_000) return Math.round(n / 1_000) + 'K';
+          return String(n);
+        }
+
+        async function fetchSystemStats() {
+          const data = await apiFetch('/api/system_stats');
+          if (data) {
+            document.getElementById('token-stats').textContent =
+              `🪙 In: ${fmtTokens(data.input_tokens)} | Out: ${fmtTokens(data.output_tokens)}`;
+          }
+        }
+
+        // ── open logs from dashboard ─────────────────────────────────────────
+        function openLogs(taskId) {
+          selectedLogExp.value = taskId;
+          activeTab.value = 'logs';
+        }
+
+        // ── settings functions ────────────────────────────────────────────────
+        async function loadSettings() {
+          settingsLoading.value = true;
+          settingsMsg.value = '';
+          try {
+            const res = await fetch('/api/settings');
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            const formFields = [
+              'llm_provider', 'anthropic_api_key', 'anthropic_model',
+              'anthropic_base_url', 'kimi_api_key', 'kimi_model', 'default_max_retries',
+            ];
+            for (const key of formFields) {
+              if (data[key] !== undefined) {
+                settings.value[key] = data[key] ?? '';
+              }
+            }
+          } catch (e) {
+            settingsMsg.value = `加载失败: ${e.message}`;
+          } finally {
+            settingsLoading.value = false;
+          }
+        }
+
+        async function saveSettings() {
+          settingsSaving.value = true;
+          settingsMsg.value = '';
+          try {
+            const res = await fetch('/api/settings', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                llm_provider: settings.value.llm_provider,
+                anthropic_api_key: settings.value.anthropic_api_key,
+                anthropic_model: settings.value.anthropic_model,
+                anthropic_base_url: settings.value.anthropic_base_url || null,
+                kimi_api_key: settings.value.kimi_api_key,
+                kimi_model: settings.value.kimi_model,
+                default_max_retries: Number(settings.value.default_max_retries),
+              }),
+            });
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}));
+              throw new Error(err.detail || `HTTP ${res.status}`);
+            }
+            settingsMsg.value = '保存成功 ✓';
+          } catch (e) {
+            settingsMsg.value = `保存失败: ${e.message}`;
+          } finally {
+            settingsSaving.value = false;
+          }
+        }
+
+        // ── cron functions ────────────────────────────────────────────────────
+        async function fetchCronJobs() {
+          const data = await apiFetch('/api/cron_jobs');
+          if (data) cronJobs.value = data;
+        }
+
+        async function addCronJob() {
+          cronMsg.value = '';
+          if (!newCronExpr.value.trim() || !newCronInstruction.value.trim() || !newCronChatId.value.trim()) {
+            cronMsg.value = '请填写所有必填字段';
+            return;
+          }
+          try {
+            const res = await fetch('/api/cron_jobs', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                cron_expression: newCronExpr.value.trim(),
+                instruction: newCronInstruction.value.trim(),
+                chat_id: newCronChatId.value.trim(),
+              }),
+            });
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}));
+              throw new Error(err.detail || `HTTP ${res.status}`);
+            }
+            cronMsg.value = '添加成功 ✓';
+            newCronExpr.value = '';
+            newCronInstruction.value = '';
+            newCronChatId.value = '';
+            await fetchCronJobs();
+          } catch (e) {
+            cronMsg.value = `添加失败: ${e.message}`;
+          }
+        }
+
+        async function deleteCronJob(jobId) {
+          cronMsg.value = '';
+          try {
+            const res = await fetch(`/api/cron_jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}));
+              throw new Error(err.detail || `HTTP ${res.status}`);
+            }
+            cronMsg.value = '删除成功 ✓';
+            await fetchCronJobs();
+          } catch (e) {
+            cronMsg.value = `删除失败: ${e.message}`;
+          }
+        }
+
+        // ── watchers ──────────────────────────────────────────────────────────
+        watch(selectedLogExp, () => { fetchLogs(); });
+
+        watch(mainMessages, async () => {
+          await scrollToBottom(mainChatBox.value);
         });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.detail || `HTTP ${res.status}`);
-        }
-        settingsMsg.value = '保存成功 ✓';
-      } catch (e) {
-        settingsMsg.value = `保存失败: ${e.message}`;
-      } finally {
-        settingsSaving.value = false;
+
+        watch(subMessages, async () => {
+          await scrollToBottom(subChatBox.value);
+        });
+
+        watch(activeTab, (tab) => {
+          if (tab === 'settings') loadSettings();
+          if (tab === 'crons') fetchCronJobs();
+        });
+
+        // ── polling intervals ─────────────────────────────────────────────────
+        let timers = [];
+
+        onMounted(async () => {
+          updateClock();
+          await fetchExperiments();
+          await fetchHistories();
+          await fetchSystemStats();
+
+          // Clock tick every second
+          timers.push(setInterval(updateClock, 1000));
+
+          // Experiments + token stats every 5 s
+          timers.push(setInterval(() => { fetchExperiments(); fetchSystemStats(); }, 5000));
+
+          // Logs: every 3 s when Running, else every 10 s
+          timers.push(setInterval(() => {
+            if (!selectedLogExp.value) return;
+            if (selectedLogExpStatus.value === 'Running') {
+              fetchLogs();
+            }
+          }, 3000));
+
+          timers.push(setInterval(() => {
+            if (!selectedLogExp.value) return;
+            if (selectedLogExpStatus.value !== 'Running') {
+              fetchLogs();
+            }
+          }, 10000));
+
+          // Histories every 10 s
+          timers.push(setInterval(fetchHistories, 10000));
+        });
+
+        onUnmounted(() => { timers.forEach(clearInterval); });
+
+        return {
+          activeTab, tabs, toast, nowStr,
+          experiments, selectedLogExp, logs, selectedLogExpStatus,
+          histories, selectedMainChat, selectedSubTask,
+          mainChatIds, subTaskIds, mainMessages, subMessages,
+          runLogBox, errLogBox, mainChatBox, subChatBox,
+          statusBadge, fmtTime, openLogs,
+          settings, settingsLoading, settingsSaving, settingsMsg,
+          loadSettings, saveSettings,
+          cronJobs, newCronExpr, newCronInstruction, newCronChatId, cronMsg,
+          fetchCronJobs, addCronJob, deleteCronJob,
+        };
       }
-    }
-
-    // ── watchers ──────────────────────────────────────────────────────────
-    watch(selectedLogExp, () => { fetchLogs(); });
-
-    watch(mainMessages, async () => {
-      await scrollToBottom(mainChatBox.value);
-    });
-
-    watch(subMessages, async () => {
-      await scrollToBottom(subChatBox.value);
-    });
-
-    watch(activeTab, (tab) => {
-      if (tab === 'settings') loadSettings();
-    });
-
-    // ── polling intervals ─────────────────────────────────────────────────
-    let timers = [];
-
-    onMounted(async () => {
-      updateClock();
-      await fetchExperiments();
-      await fetchHistories();
-      await fetchSystemStats();
-
-      // Clock tick every second
-      timers.push(setInterval(updateClock, 1000));
-
-      // Experiments + token stats every 5 s
-      timers.push(setInterval(() => { fetchExperiments(); fetchSystemStats(); }, 5000));
-
-      // Logs: every 3 s when Running, else every 10 s
-      timers.push(setInterval(() => {
-        if (!selectedLogExp.value) return;
-        if (selectedLogExpStatus.value === 'Running') {
-          fetchLogs();
-        }
-      }, 3000));
-
-      timers.push(setInterval(() => {
-        if (!selectedLogExp.value) return;
-        if (selectedLogExpStatus.value !== 'Running') {
-          fetchLogs();
-        }
-      }, 10000));
-
-      // Histories every 10 s
-      timers.push(setInterval(fetchHistories, 10000));
-    });
-
-    onUnmounted(() => { timers.forEach(clearInterval); });
-
-    return {
-      activeTab, tabs, toast, nowStr,
-      experiments, selectedLogExp, logs, selectedLogExpStatus,
-      histories, selectedMainChat, selectedSubTask,
-      mainChatIds, subTaskIds, mainMessages, subMessages,
-      runLogBox, errLogBox, mainChatBox, subChatBox,
-      statusBadge, fmtTime, openLogs,
-      settings, settingsLoading, settingsSaving, settingsMsg,
-      loadSettings, saveSettings,
-    };
-  }
-}).mount('#app');
-</script>
+    }).mount('#app');
+  </script>
 </body>
+
 </html>

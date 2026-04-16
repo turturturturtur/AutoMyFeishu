@@ -366,3 +366,42 @@ async def update_settings(request: Request, payload: Dict[str, Any]) -> dict[str
         _reload_ai_client(svc)
 
     return {"status": "ok"}
+
+
+# ── cron job endpoints ────────────────────────────────────────────────────────
+
+@router.get("/api/cron_jobs")
+async def list_cron_jobs(request: Request) -> list[dict[str, Any]]:
+    """Return all scheduled cron jobs with next_run_time."""
+    return _svc(request).scheduler.get_jobs_for_api()
+
+
+@router.post("/api/cron_jobs")
+async def create_cron_job(request: Request, payload: Dict[str, Any]) -> dict[str, Any]:
+    """Create a new cron job.
+
+    Payload fields:
+      cron_expression (str): 5-field cron, e.g. "0 9 * * *"
+      instruction     (str): Task description / prompt for the AI agent
+      chat_id         (str): Feishu chat_id to send results to
+    """
+    svc = _svc(request)
+    cron_expr = str(payload.get("cron_expression") or "").strip()
+    instruction = str(payload.get("instruction") or "").strip()
+    chat_id = str(payload.get("chat_id") or "").strip()
+    if not cron_expr or not instruction or not chat_id:
+        raise HTTPException(status_code=422, detail="cron_expression, instruction, chat_id 均为必填")
+    try:
+        job_id = svc.scheduler.add_cron_job(cron_expr, instruction, chat_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"job_id": job_id, "status": "created"}
+
+
+@router.delete("/api/cron_jobs/{job_id}")
+async def delete_cron_job(job_id: str, request: Request) -> dict[str, str]:
+    """Delete a cron job by job_id."""
+    msg = _svc(request).scheduler.cancel_job(job_id)
+    if "❌" in msg:
+        raise HTTPException(status_code=404, detail=msg)
+    return {"status": "deleted", "job_id": job_id}
