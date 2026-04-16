@@ -289,8 +289,14 @@ def _reload_ai_client(svc: Services) -> None:
             base_url=cfg.anthropic_base_url or None,
         )
     svc.ai = new_ai
+    # Clear all conversation histories: the two providers use incompatible
+    # message formats (Anthropic ContentBlock objects vs plain OpenAI dicts).
+    # Keeping old history across a provider switch would cause crashes or
+    # identity leakage (Claude history being fed to Kimi or vice-versa).
+    svc.main_agent_histories.clear()
+    svc.sub_agent_histories.clear()
     logger.info(
-        "AI client hot-reloaded: provider=%s model=%s",
+        "AI client hot-reloaded: provider=%s model=%s — conversation histories cleared",
         cfg.llm_provider,
         getattr(new_ai, "_model", "?"),
     )
@@ -350,7 +356,7 @@ async def update_settings(request: Request, payload: Dict[str, Any]) -> dict[str
             # Persist to .env (dotenv uses uppercase key names)
             env_key = field_name.upper()
             dotenv_value = "" if coerced is None else str(coerced)
-            _dotenv_set_key(_ENV_FILE, env_key, dotenv_value, quote_mode="always")
+            _dotenv_set_key(_ENV_FILE, env_key, dotenv_value, quote_mode="never")
 
             # Mutate in-memory config (bypass pydantic's __setattr__ validator)
             object.__setattr__(cfg, field_name, coerced)
