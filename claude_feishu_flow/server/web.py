@@ -1,4 +1,4 @@
-"""Web Dashboard routes: REST API + Jinja2 page rendering."""
+"""Web Dashboard routes: REST API + static HTML page."""
 
 from __future__ import annotations
 
@@ -8,8 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import FileResponse
 
 from claude_feishu_flow.ai.tools import get_experiment_alias
 from claude_feishu_flow.ai.token_tracker import get_tracker
@@ -17,7 +16,7 @@ from claude_feishu_flow.server.app import Services
 
 logger = logging.getLogger(__name__)
 
-templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+_INDEX_HTML = Path(__file__).parent / "templates" / "index.html"
 
 router = APIRouter()
 
@@ -104,9 +103,9 @@ def _sanitize_history(history: list[dict]) -> list[dict[str, str]]:
 
 # ── page route ───────────────────────────────────────────────────────────────
 
-@router.get("/", response_class=HTMLResponse, include_in_schema=False)
-async def dashboard(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request=request, name="index.html")
+@router.get("/", include_in_schema=False)
+async def dashboard() -> FileResponse:
+    return FileResponse(_INDEX_HTML, media_type="text/html")
 
 
 # ── REST API ─────────────────────────────────────────────────────────────────
