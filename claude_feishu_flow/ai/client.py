@@ -97,7 +97,7 @@ class ClaudeClient:
 
     async def _create_message(self, **kwargs: object) -> anthropic.types.Message:
         """Wrapper around messages.create that records token usage."""
-        response = await self._create_message(**kwargs)  # type: ignore[arg-type]
+        response = await self._client.messages.create(**kwargs)  # type: ignore[arg-type]
         await self._tracker.record(
             response.usage.input_tokens,
             response.usage.output_tokens,
