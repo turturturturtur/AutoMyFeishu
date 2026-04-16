@@ -198,8 +198,22 @@ async def feishu_webhook(
             if event.message_id:
                 svc.processing_ids.discard(event.message_id)
             return JSONResponse({"code": 0, "msg": "not_mentioned"})
+        # Check by open_id (most reliable) or by display name (fallback)
         bot_oid = svc.config.feishu_bot_open_id
-        if bot_oid and bot_oid not in event.mentions:
+        bot_name = svc.config.feishu_bot_name
+        bot_mentioned = False
+        if bot_oid:
+            bot_mentioned = bot_oid in event.mentions
+        elif bot_name:
+            bot_mentioned = bot_name in event.mention_names
+        else:
+            # No identifier configured — cannot verify, reject to avoid false triggers
+            logger.warning(
+                "Group message received but feishu_bot_open_id and feishu_bot_name are both empty; "
+                "rejecting. Set FEISHU_BOT_NAME (default: AutoMyFeishu) in .env to enable group chat."
+            )
+            bot_mentioned = False
+        if not bot_mentioned:
             if event.message_id:
                 svc.processing_ids.discard(event.message_id)
             return JSONResponse({"code": 0, "msg": "bot_not_mentioned"})

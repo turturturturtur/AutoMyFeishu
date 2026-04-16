@@ -14,9 +14,11 @@ class Config(BaseSettings):
     feishu_encrypt_key: str = ""
     # The bot's own open_id — used to validate @-mentions in group chats.
     # Obtain via Feishu Open API: GET /contact/v3/users/me
-    # Leave empty to skip strict bot-mention validation (safe since Feishu only
-    # pushes group messages where the bot is @-tagged anyway).
+    # Leave empty to skip open_id-based validation and rely on feishu_bot_name instead.
     feishu_bot_open_id: str = ""
+    # The bot's display name in Feishu — used to validate @-mentions in group chats
+    # when feishu_bot_open_id is not configured. Must match the bot's name exactly.
+    feishu_bot_name: str = "AutoMyFeishu"
 
     # Feishu Bitable target
     bitable_app_token: str

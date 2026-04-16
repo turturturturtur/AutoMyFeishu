@@ -83,6 +83,7 @@ class WebhookEvent:
     parent_id: Optional[str] = None   # 引用回复时，被引用的原始消息 ID
     mentions: list[str] = field(default_factory=list)   # @提及用户的 open_id 列表
     mention_keys: list[str] = field(default_factory=list)  # 飞书 mentions[].key 占位符（如 @_user_1），用于文本清洗
+    mention_names: list[str] = field(default_factory=list)  # @提及用户的显示名称列表，用于按名称匹配机器人
     # card.action.trigger fields (button clicks on interactive cards)
     action_tag: Optional[str] = None       # e.g. "button"
     action_value: dict = field(default_factory=dict)  # e.g. {"key": "enter_session", "task_id": "exp_xxx"}
@@ -214,6 +215,11 @@ def parse_webhook_event(raw: dict) -> WebhookEvent:
             for m in mentions_raw
             if m.get("key")
         ]
+        mention_names: list[str] = [
+            m.get("name", "")
+            for m in mentions_raw
+            if m.get("name")
+        ]
 
         return WebhookEvent(
             event_type=event_type,
@@ -228,6 +234,7 @@ def parse_webhook_event(raw: dict) -> WebhookEvent:
             parent_id=message.get("parent_id"),
             mentions=mentions,
             mention_keys=mention_keys,
+            mention_names=mention_names,
             raw=raw,
         )
 
