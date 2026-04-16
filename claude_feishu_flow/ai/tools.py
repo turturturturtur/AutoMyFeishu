@@ -1,22 +1,23 @@
 """Claude tool definitions for the experiment assistant.
 
 Generation phase tools (ALL_TOOLS):
-  save_script — write generated files (plan.md, main.py, run.sh) to the experiment's setting/ directory.
+  save_script — write generated files (plan.md, main.py, run.sh) to the experiment directory.
 
 Sub Agent tools (SUB_AGENT_TOOLS):
-  read_realtime_log    — read tail of output/run.log
-  save_script          — overwrite any file under setting/ (same tool, different context)
+  read_realtime_log    — read tail of run.log (root or output/)
+  save_script          — overwrite any file in the experiment directory
   restart_experiment   — signal the orchestrator to kill old process and restart with new code
   execute_bash_command — run shell commands inline
   send_local_image     — upload a local image file and send it to the Feishu chat
+  sync_back_repo       — sync code changes back to the Storage master repo (safe whitelist filter)
 
 Main Agent (Orchestrator) tools (MAIN_AGENT_TOOLS):
   execute_bash_command     — run shell commands inline
   list_experiments         — list experiment directories with metrics
-  launch_experiment        — blocking: trigger new experiment pipeline
+  launch_experiment        — blocking: trigger new experiment pipeline (supports base_repo)
   edit_experiment          — blocking: trigger edit pipeline
   review_experiment        — blocking: trigger standalone code review (no execution)
-  plot_experiment_metrics  — generate a matplotlib chart from run.log → results/plot.png
+  plot_experiment_metrics  — generate a matplotlib chart from run.log
   create_cron_job          — blocking: register a recurring scheduled task
   list_cron_jobs           — inline: list all active scheduled jobs
   cancel_cron_job          — inline: cancel a scheduled job by ID
@@ -39,10 +40,10 @@ logger = logging.getLogger(__name__)
 SAVE_SCRIPT_TOOL: dict = {
     "name": "save_script",
     "description": (
-        "Save a file to the experiment's setting/ directory. "
-        "You MUST call this tool twice: first with filename='plan.md' to write the experiment plan, "
-        "then with filename='main.py' to write the executable Python script. "
-        "Both files are saved under setting/ inside the experiment directory. "
+        "Save a file to the experiment directory. "
+        "For new blank experiments, use filename='plan.md' then filename='main.py' (saved under setting/). "
+        "For repo-seeded experiments, write files directly to their proper path within the repo structure "
+        "(e.g. filename='src/model.py'). "
         "Returns the absolute path of the saved file."
     ),
     "input_schema": {
@@ -50,11 +51,11 @@ SAVE_SCRIPT_TOOL: dict = {
         "properties": {
             "filename": {
                 "type": "string",
-                "description": "Filename to save: 'plan.md' for the experiment plan, 'main.py' for the Python script.",
+                "description": "Relative path of the file to save (e.g. 'plan.md', 'main.py', or 'src/train.py' for repo experiments).",
             },
             "code": {
                 "type": "string",
-                "description": "Complete file content: markdown text for plan.md, or Python source code for main.py.",
+                "description": "Complete file content.",
             },
         },
         "required": ["filename", "code"],
@@ -140,7 +141,30 @@ SEND_LOCAL_IMAGE_TOOL: dict = {
     },
 }
 
-SUB_AGENT_TOOLS: list[dict] = [READ_LOG_TOOL, SAVE_SCRIPT_TOOL, RESTART_EXPERIMENT_TOOL, EXECUTE_BASH_TOOL, SEND_LOCAL_IMAGE_TOOL]
+SYNC_BACK_REPO_TOOL: dict = {
+    "name": "sync_back_repo",
+    "description": (
+        "当你完成代码修改并在本地跑通了 Smoke Test 后，调用此工具将改动同步回 Storage 中的主仓库。"
+        "只同步代码和配置文件（.py/.sh/.json/.yaml/.md 等），绝不写回 .pth/.ckpt/.log 等大文件。"
+        "返回成功回写的文件列表。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "task_id": {
+                "type": "string",
+                "description": "当前实验 ID，格式为 exp_<uuid>。",
+            },
+            "repo_name": {
+                "type": "string",
+                "description": "目标仓库名称（与启动时的 base_repo 参数相同）。",
+            },
+        },
+        "required": ["task_id", "repo_name"],
+    },
+}
+
+SUB_AGENT_TOOLS: list[dict] = [READ_LOG_TOOL, SAVE_SCRIPT_TOOL, RESTART_EXPERIMENT_TOOL, EXECUTE_BASH_TOOL, SEND_LOCAL_IMAGE_TOOL, SYNC_BACK_REPO_TOOL]
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +193,10 @@ LAUNCH_EXPERIMENT_TOOL: dict = {
             "alias": {
                 "type": "string",
                 "description": "实验的简短易读别名，例如 'ViT_CIFAR10_baseline'。系统将用别名代替 UUID 显示。",
+            },
+            "base_repo": {
+                "type": "string",
+                "description": "如果要基于已有仓库实验，填入该仓库的名称（对应 Storage/<open_id>/<repo_name>/ 目录）。系统会将该仓库全量克隆到实验沙盒。留空则创建空白实验目录。",
             },
         },
         "required": ["instruction"],
@@ -377,6 +405,7 @@ class MainAgentResult:
     action_instruction: str | None = None
     plot_path: str | None = None
     action_alias: str | None = None
+    action_base_repo: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -419,9 +448,8 @@ def convert_to_openai_tools(anthropic_tools: list[dict]) -> list[dict]:
 def get_experiment_alias(exp_dir: Path) -> str:
     """Return the human-readable alias for an experiment, falling back to the directory name.
 
-    Reads setting/meta.json and returns the "alias" key if present and non-empty.
-    Falls back to exp_dir.name (e.g. "exp_<uuid>") if the file is absent or the
-    alias key is missing/empty.
+    Checks meta.json at the experiment root first, then legacy setting/meta.json.
+    Falls back to exp_dir.name (e.g. "exp_<uuid>") if neither file has an alias.
 
     Args:
         exp_dir: The experiment root directory (e.g. Experiments/exp_<uuid>/).
@@ -430,15 +458,15 @@ def get_experiment_alias(exp_dir: Path) -> str:
         The alias string, or exp_dir.name as fallback.
     """
     import json as _json
-    meta_path = exp_dir / "setting" / "meta.json"
-    try:
-        if meta_path.exists():
-            data = _json.loads(meta_path.read_text(encoding="utf-8"))
-            alias = data.get("alias", "")
-            if alias and alias.strip():
-                return alias.strip()
-    except Exception:
-        pass
+    for meta_path in (exp_dir / "meta.json", exp_dir / "setting" / "meta.json"):
+        try:
+            if meta_path.exists():
+                data = _json.loads(meta_path.read_text(encoding="utf-8"))
+                alias = data.get("alias", "")
+                if alias and alias.strip():
+                    return alias.strip()
+        except Exception:
+            pass
     return exp_dir.name
 
 
@@ -447,16 +475,20 @@ def get_experiment_alias(exp_dir: Path) -> str:
 # ---------------------------------------------------------------------------
 
 async def handle_save_script(inputs: dict, experiment_dir: Path) -> str:
-    """Write the generated file to experiment_dir/setting/<filename>.
+    """Write a file to the experiment directory.
 
-    When filename is 'main.py', any existing run.sh is removed so the executor
-    falls back to `python3 setting/main.py`.  If the caller wants a custom
-    launcher they must also save a run.sh explicitly.
+    Routing logic:
+    - If filename is a simple name (no path separator) like 'main.py' or 'plan.md',
+      the file is saved under setting/ for backward compatibility with legacy experiments.
+    - If filename contains a path separator (e.g. 'src/model.py', 'configs/train.yaml'),
+      the file is saved relative to experiment_dir root, preserving the repo structure.
+
+    When filename is 'main.py' (simple name, saved in setting/), any existing
+    setting/run.sh is removed so the executor falls back to the correct launcher.
 
     Args:
         inputs:          The tool input dict from Claude (must contain 'filename' and 'code').
         experiment_dir:  The experiment root directory (Experiments/exp_<uuid>/).
-                         The setting/ subdirectory is created if it does not exist.
 
     Returns:
         Absolute path of the saved file as a string.
@@ -464,26 +496,34 @@ async def handle_save_script(inputs: dict, experiment_dir: Path) -> str:
     filename: str = inputs["filename"]
     code: str = inputs["code"]
 
-    setting_dir = experiment_dir / "setting"
-    setting_dir.mkdir(parents=True, exist_ok=True)
-    script_path = setting_dir / filename
+    if "/" in filename or "\\" in filename:
+        # Repo-style path: write relative to experiment root
+        script_path = experiment_dir / filename
+        script_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        # Legacy simple filename: write under setting/
+        setting_dir = experiment_dir / "setting"
+        setting_dir.mkdir(parents=True, exist_ok=True)
+        script_path = setting_dir / filename
+
+        # When main.py is overwritten (e.g. reverting to single-GPU), remove any
+        # stale run.sh so the executor doesn't keep using the old launcher.
+        if filename == "main.py":
+            run_sh = setting_dir / "run.sh"
+            if run_sh.exists():
+                run_sh.unlink()
+                logger.info("save_script: removed stale run.sh (main.py was overwritten)")
+
     script_path.write_text(code, encoding="utf-8")
-
-    # When main.py is overwritten (e.g. reverting to single-GPU), remove any
-    # stale run.sh so the executor doesn't keep using the old launcher.
-    if filename == "main.py":
-        run_sh = setting_dir / "run.sh"
-        if run_sh.exists():
-            run_sh.unlink()
-            logger.info("save_script: removed stale run.sh (main.py was overwritten)")
-
     abs_path = str(script_path.resolve())
     logger.info("save_script: wrote %d bytes to %s", len(code), abs_path)
     return abs_path
 
 
 async def handle_read_log(inputs: dict, experiment_dir: Path) -> str:
-    """Read the last N lines from experiment_dir/output/run.log.
+    """Read the last N lines from the experiment's run.log.
+
+    Checks experiment root first (new layout), then output/ subdir (legacy layout).
 
     Args:
         inputs:          Tool input dict from Claude (may contain 'n_lines').
@@ -493,10 +533,13 @@ async def handle_read_log(inputs: dict, experiment_dir: Path) -> str:
         The tail of the log file as a string, or a descriptive message if empty/missing.
     """
     n_lines: int = inputs.get("n_lines", 50)
-    log_path = experiment_dir / "output" / "run.log"
+    # Prefer root-level log (new layout), fall back to output/ (legacy)
+    log_path = experiment_dir / "run.log"
+    if not log_path.exists():
+        log_path = experiment_dir / "output" / "run.log"
 
     if not log_path.exists():
-        return f"Log file does not exist yet: {log_path}"
+        return f"Log file does not exist yet: {experiment_dir}/run.log"
 
     text = log_path.read_text(encoding="utf-8", errors="replace")
     if not text.strip():
@@ -729,3 +772,118 @@ async def handle_plot_metrics(inputs: dict, exp_base_dir: Path) -> str:
 
     logger.info("handle_plot_metrics: plot saved to %s", plot_path)
     return f"PLOT_READY:{plot_path}"
+
+
+# ---------------------------------------------------------------------------
+# sync_back_repo handler
+# ---------------------------------------------------------------------------
+
+# Extensions allowed to be written back to the Storage master repo
+_SYNC_BACK_ALLOWED_EXTENSIONS: frozenset[str] = frozenset({
+    ".py", ".sh", ".json", ".yaml", ".yml", ".md", ".txt",
+    ".cfg", ".toml", ".ini", ".env", ".rst", ".ipynb",
+})
+
+# Patterns in relative path that are always skipped
+_SYNC_BACK_BLOCKED_PARTS: tuple[str, ...] = (
+    "__pycache__", ".git", ".pth", ".pt", ".ckpt", ".bin",
+    ".log", ".h5", ".hdf5", ".npy", ".npz", ".pkl", ".safetensors",
+)
+
+# Max file size to write back (5 MB)
+_SYNC_BACK_MAX_BYTES: int = 5 * 1024 * 1024
+
+
+async def handle_sync_back(
+    inputs: dict,
+    exp_base_dir: Path,
+    storage_dir: Path,
+    open_id: str,
+) -> str:
+    """Sync code changes from an experiment sandbox back to the Storage master repo.
+
+    Safety rules (all enforced, no exceptions):
+    - Skip symlinks (never dereference large dataset links)
+    - Skip files whose suffix is not in _SYNC_BACK_ALLOWED_EXTENSIONS
+    - Skip files containing any blocked pattern in their relative path
+    - Skip files larger than 5 MB
+    - Explicitly create parent directories before copying (handles new subdirs)
+
+    Args:
+        inputs:       Tool call inputs with keys "task_id" and "repo_name".
+        exp_base_dir: Root directory containing all exp_<uuid> subdirectories.
+        storage_dir:  The Storage root (config.resolved_storage_dir()).
+        open_id:      The user's Feishu open_id (for Storage/<open_id>/<repo_name>/).
+
+    Returns:
+        A summary string listing synced files or explaining why nothing was synced.
+    """
+    import shutil as _shutil
+
+    task_id: str = inputs["task_id"]
+    repo_name: str = inputs["repo_name"]
+
+    exp_dir = exp_base_dir / task_id
+    if not exp_dir.is_dir():
+        return f"❌ 实验目录不存在: {exp_dir}"
+
+    storage_repo_dir = storage_dir / open_id / repo_name
+    if not storage_repo_dir.is_dir():
+        return f"❌ Storage 中未找到仓库 '{repo_name}'（路径: {storage_repo_dir}）。请确认仓库已上传到 Storage。"
+
+    synced: list[str] = []
+    skipped_count = 0
+
+    for src_path in exp_dir.rglob("*"):
+        if not src_path.is_file():
+            continue
+
+        # Skip symlinks — never dereference (could point to massive datasets)
+        if src_path.is_symlink():
+            skipped_count += 1
+            continue
+
+        rel_path = src_path.relative_to(exp_dir)
+        rel_str = str(rel_path)
+
+        # Skip blocked patterns (binary weights, logs, caches, .git, etc.)
+        if any(blocked in rel_str for blocked in _SYNC_BACK_BLOCKED_PARTS):
+            skipped_count += 1
+            continue
+
+        # Skip non-whitelisted extensions
+        if src_path.suffix.lower() not in _SYNC_BACK_ALLOWED_EXTENSIONS:
+            skipped_count += 1
+            continue
+
+        # Skip files exceeding size limit
+        try:
+            size = src_path.stat().st_size
+        except OSError:
+            skipped_count += 1
+            continue
+        if size > _SYNC_BACK_MAX_BYTES:
+            logger.warning("sync_back: skipping oversized file %s (%d bytes)", rel_str, size)
+            skipped_count += 1
+            continue
+
+        # Copy to Storage, creating parent directories as needed
+        dest_path = storage_repo_dir / rel_path
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        _shutil.copy2(src_path, dest_path)
+        synced.append(rel_str)
+        logger.info("sync_back: %s → %s", src_path, dest_path)
+
+    if not synced:
+        return (
+            f"⚠️ 没有文件被同步回 '{repo_name}'。"
+            f"跳过了 {skipped_count} 个文件（不符合白名单或超过大小限制）。"
+        )
+
+    synced_list = "\n".join(f"  - {f}" for f in synced[:50])
+    more = f"\n  ...以及另外 {len(synced) - 50} 个文件" if len(synced) > 50 else ""
+    return (
+        f"✅ 成功将 {len(synced)} 个文件同步回 Storage/{open_id}/{repo_name}/：\n"
+        f"{synced_list}{more}\n"
+        f"（已跳过 {skipped_count} 个文件：大文件/二进制/日志/软链接）"
+    )

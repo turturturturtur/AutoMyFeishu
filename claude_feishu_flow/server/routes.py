@@ -38,6 +38,22 @@ def _tail_file(path: Path, max_chars: int) -> str:
         return ""
 
 
+def _find_log(exp_dir: Path, filename: str) -> Path:
+    """Return log path, preferring exp_dir root (new layout) over output/ subdir (legacy)."""
+    root = exp_dir / filename
+    if root.exists():
+        return root
+    return exp_dir / "output" / filename
+
+
+def _meta_path(exp_dir: Path) -> Path:
+    """Return meta.json path, preferring exp_dir root (new) over setting/ (legacy)."""
+    legacy = exp_dir / "setting" / "meta.json"
+    if legacy.exists():
+        return legacy
+    return exp_dir / "meta.json"
+
+
 def _user_exp_dir(svc, open_id: str) -> Path:  # type: ignore[no-untyped-def]
     """Return (and auto-create) the per-user experiment root: <experiments_root>/<open_id>/"""
     path = svc.config.resolved_experiments_dir() / open_id
@@ -574,8 +590,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
 
         task_id = f"exp_{uuid.uuid4()}"
         exp_dir = _user_exp_dir(svc, open_id) / task_id
-        for sub in ("setting", "output", "results"):
-            (exp_dir / sub).mkdir(parents=True, exist_ok=True)
+        exp_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info(
             "/launch fast path: task_id=%s chat_id=%s max_retries=%d exp_dir=%s",
@@ -680,11 +695,11 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                 instruction = result.action_instruction or user_text
                 task_id = f"exp_{uuid.uuid4()}"
                 exp_dir = exp_base_dir / task_id
-                for sub in ("setting", "output", "results"):
-                    (exp_dir / sub).mkdir(parents=True, exist_ok=True)
+                exp_dir.mkdir(parents=True, exist_ok=True)
+                base_repo = result.action_base_repo if hasattr(result, "action_base_repo") else None
                 logger.info(
-                    "Orchestrator triggered launch: task_id=%s instruction=%r",
-                    task_id, instruction[:80],
+                    "Orchestrator triggered launch: task_id=%s instruction=%r base_repo=%r",
+                    task_id, instruction[:80], base_repo,
                 )
                 asyncio.create_task(_run_experiment_pipeline(
                     svc=svc,
@@ -698,13 +713,21 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                     reply_message_id=event.message_id,
                     images=images if images else None,
                     alias=result.action_alias,
+                    base_repo=base_repo,
                 ))
 
             elif result.action_type == "edit":
                 tid = result.action_task_id or ""
                 instruction = result.action_instruction or ""
                 exp_dir = exp_base_dir / tid
-                if not (exp_dir / "setting" / "main.py").exists():
+                # Support both new flat layout (main.py/train.py/run.sh at root) and legacy setting/
+                has_entry = (
+                    (exp_dir / "main.py").exists()
+                    or (exp_dir / "train.py").exists()
+                    or (exp_dir / "run.sh").exists()
+                    or (exp_dir / "setting" / "main.py").exists()
+                )
+                if not has_entry:
                     await svc.messaging.send_text(
                         chat_id,
                         f"实验 `{tid}` 不存在或尚未生成脚本，无法编辑。",
@@ -731,7 +754,12 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
             elif result.action_type == "review":
                 r_tid = result.action_task_id or ""
                 r_exp_dir = _resolve_exp_dir(svc, open_id, r_tid)
-                if r_exp_dir is None or not (r_exp_dir / "setting" / "main.py").exists():
+                r_has_code = r_exp_dir is not None and (
+                    (r_exp_dir / "main.py").exists()
+                    or (r_exp_dir / "train.py").exists()
+                    or (r_exp_dir / "setting" / "main.py").exists()
+                )
+                if not r_has_code:
                     await svc.messaging.send_text(
                         chat_id,
                         f"❌ 实验 {r_tid} 不存在或尚未生成代码。",
@@ -744,7 +772,10 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                         f"🕵️ 正在对 {r_tid} 进行代码审阅，请稍候...",
                         reply_message_id=event.message_id,
                     )
-                    plan_path = r_exp_dir / "setting" / "plan.md"
+                    # Support both new flat layout (plan.md at root) and legacy setting/
+                    plan_path = r_exp_dir / "plan.md"
+                    if not plan_path.exists():
+                        plan_path = r_exp_dir / "setting" / "plan.md"
                     instruction_hint = plan_path.read_text(encoding="utf-8")[:500] if plan_path.exists() else ""
                     try:
                         review_report = await svc.ai.review_experiment(
@@ -943,6 +974,7 @@ async def _run_experiment_pipeline(
     reply_message_id: str | None,
     images: list[dict] | None = None,
     alias: str | None = None,
+    base_repo: str | None = None,
 ) -> None:
     """Full A→B→C→D pipeline for both new launches and edits.
 
@@ -973,9 +1005,32 @@ async def _run_experiment_pipeline(
 
         await notify("正在理解需求，生成实验计划和脚本，请稍候...")
 
+        # ── Seed from Storage repo (if base_repo was specified) ───────────────
+        if base_repo:
+            import shutil as _shutil
+            storage_repo_src = svc.config.resolved_storage_dir() / open_id / base_repo
+            if storage_repo_src.is_dir():
+                _shutil.copytree(
+                    str(storage_repo_src),
+                    str(exp_dir),
+                    symlinks=True,
+                    dirs_exist_ok=True,
+                )
+                logger.info(
+                    "[%s] Seeded exp_dir from Storage repo '%s': %s → %s",
+                    task_id, base_repo, storage_repo_src, exp_dir,
+                )
+                await notify(f"已从仓库 `{base_repo}` 克隆到实验沙盒，正在生成修改方案...")
+            else:
+                logger.warning(
+                    "[%s] base_repo '%s' not found at %s, proceeding with empty exp_dir",
+                    task_id, base_repo, storage_repo_src,
+                )
+                await notify(f"⚠️ Storage 中未找到仓库 '{base_repo}'，将创建空白实验目录。")
+
         # ── Read / initialise meta.json ───────────────────────────────────────
         import json as _json
-        meta_path = exp_dir / "setting" / "meta.json"
+        meta_path = _meta_path(exp_dir)
         meta: dict = {}
         if meta_path.exists():
             try:
@@ -1153,6 +1208,8 @@ async def _handle_sub_agent_message(
                 history=history,
                 user_exp_dir=_user_exp_dir(svc, open_id),
                 send_image_callback=_send_image_to_feishu,
+                storage_dir=svc.config.resolved_storage_dir(),
+                open_id=open_id,
             )
         await svc.messaging.send_markdown(chat_id, result.text, reply_message_id=event_message_id)
         if result.needs_restart:
@@ -1193,10 +1250,12 @@ async def _restart_and_notify(
             # This run was itself superseded by yet another restart; stay silent
             return
         status = "success" if result.returncode == 0 else "failed"
-        plan_path = exp_dir / "setting" / "plan.md"
+        plan_path = exp_dir / "plan.md"
+        if not plan_path.exists():
+            plan_path = exp_dir / "setting" / "plan.md"
         plan_text = _tail_file(plan_path, 99999)
-        run_log = _tail_file(exp_dir / "output" / "run.log", _LOG_TAIL_RUN)
-        err_log = _tail_file(exp_dir / "output" / "error.log", _LOG_TAIL_ERR)
+        run_log = _tail_file(_find_log(exp_dir, "run.log"), _LOG_TAIL_RUN)
+        err_log = _tail_file(_find_log(exp_dir, "error.log"), _LOG_TAIL_ERR)
         log_text = ""
         if run_log:
             log_text += f"### stdout\n{run_log}\n\n"
@@ -1278,11 +1337,13 @@ async def _run_phase_b_and_c(
     # ── Phase C: AI Analysis + Card ───────────────────────────────────────
     await notify("正在用 AI 分析实验结果，请稍候...")
 
-    plan_path = exp_dir / "setting" / "plan.md"
+    plan_path = exp_dir / "plan.md"
+    if not plan_path.exists():
+        plan_path = exp_dir / "setting" / "plan.md"
     plan_text = _tail_file(plan_path, 99999)
 
-    run_log = _tail_file(exp_dir / "output" / "run.log", _LOG_TAIL_RUN)
-    err_log = _tail_file(exp_dir / "output" / "error.log", _LOG_TAIL_ERR)
+    run_log = _tail_file(_find_log(exp_dir, "run.log"), _LOG_TAIL_RUN)
+    err_log = _tail_file(_find_log(exp_dir, "error.log"), _LOG_TAIL_ERR)
     log_text = ""
     if run_log:
         log_text += f"### stdout (run.log)\n{run_log}\n\n"
@@ -1294,7 +1355,12 @@ async def _run_phase_b_and_c(
     summary_md = await svc.ai.summarize_experiment(plan_text, log_text)
     logger.info("Phase C: AI summary generated (%d chars)", len(summary_md))
 
-    summary_path = exp_dir / "results" / "summary.md"
+    # Write summary to exp root; create results/ only if we're in legacy layout
+    results_dir = exp_dir / "results"
+    if results_dir.exists():
+        summary_path = results_dir / "summary.md"
+    else:
+        summary_path = exp_dir / "summary.md"
     summary_path.write_text(summary_md, encoding="utf-8")
 
     script_path = str(exp_dir / "setting" / "main.py")
@@ -1303,10 +1369,10 @@ async def _run_phase_b_and_c(
     import json as _json
     from datetime import datetime as _dt
     _meta: dict = {}
-    _meta_path = exp_dir / "setting" / "meta.json"
-    if _meta_path.exists():
+    _mp = _meta_path(exp_dir)
+    if _mp.exists():
         try:
-            _meta = _json.loads(_meta_path.read_text(encoding="utf-8"))
+            _meta = _json.loads(_mp.read_text(encoding="utf-8"))
         except Exception:
             pass
     _bt_app = _meta.get("bitable_app_token", "")

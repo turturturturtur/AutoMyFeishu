@@ -50,6 +50,9 @@ class Config(BaseSettings):
     # Experiments directory (each experiment gets its own subdirectory exp_<uuid>)
     experiments_dir: str = "./Experiments"
 
+    # Storage directory for large user repos: Storage/<open_id>/<repo_name>/
+    storage_dir: str = "./Storage"
+
     # Default max auto-repair retries when --retry N is not specified
     default_max_retries: int = 5
 
@@ -58,6 +61,12 @@ class Config(BaseSettings):
     def resolved_experiments_dir(self) -> Path:
         """Return the experiments directory as an absolute Path, creating it if needed."""
         path = Path(self.experiments_dir).resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def resolved_storage_dir(self) -> Path:
+        """Return the Storage directory as an absolute Path, creating it if needed."""
+        path = Path(self.storage_dir).resolve()
         path.mkdir(parents=True, exist_ok=True)
         return path
 

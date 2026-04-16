@@ -36,6 +36,7 @@ from claude_feishu_flow.ai.tools import (
     handle_read_log,
     handle_rename_experiment,
     handle_save_script,
+    handle_sync_back,
 )
 
 logger = logging.getLogger(__name__)
@@ -469,6 +470,7 @@ class ClaudeClient:
                         action_type="launch",
                         action_instruction=tool_input.get("instruction", ""),
                         action_alias=tool_input.get("alias") or None,
+                        action_base_repo=tool_input.get("base_repo") or None,
                     )
                     tool_results.append({
                         "type": "tool_result",
@@ -988,6 +990,8 @@ class ClaudeClient:
         history: list[dict],
         user_exp_dir: Optional[Path] = None,
         send_image_callback: Optional[Callable[[Path], Coroutine[Any, Any, str]]] = None,
+        storage_dir: Optional[Path] = None,
+        open_id: str = "",
     ) -> SubAgentResult:
         """Handle a single turn of Sub Agent conversation.
 
@@ -999,6 +1003,8 @@ class ClaudeClient:
             user_text:  The user's current message.
             exp_dir:    Path to the experiment root directory.
             history:    Mutable list of conversation messages (mutated in place).
+            storage_dir: Storage root for sync_back_repo tool (optional).
+            open_id:    User's Feishu open_id for storage path resolution.
 
         Returns:
             SubAgentResult with Claude's text reply and a needs_restart flag.
@@ -1094,6 +1100,21 @@ class ClaudeClient:
                                 if not p.is_absolute():
                                     p = exp_dir / p
                                 result_text = await send_image_callback(p)
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": result_text,
+                            })
+                        elif block.name == "sync_back_repo":
+                            if storage_dir is None or not open_id:
+                                result_text = "❌ sync_back_repo 不可用：未提供 storage_dir 或 open_id。"
+                            else:
+                                result_text = await handle_sync_back(
+                                    block.input,
+                                    exp_base_dir=exp_dir.parent,
+                                    storage_dir=storage_dir,
+                                    open_id=open_id,
+                                )
                             tool_results.append({
                                 "type": "tool_result",
                                 "tool_use_id": block.id,

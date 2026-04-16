@@ -37,8 +37,16 @@ class ScriptExecutor:
     Supports process lifecycle management: calling run() with the same task_id
     will kill any previously-running process for that task before starting a new one.
 
-    Supports run.sh override: if setting/run.sh exists in the experiment directory,
-    it is executed via `bash setting/run.sh` instead of `python3 setting/main.py`.
+    Script discovery order (checked at experiment root first, then setting/ for
+    backward compatibility with older experiments):
+      1. run.sh       → bash run.sh
+      2. train.py     → python3 train.py
+      3. main.py      → python3 main.py
+      4. setting/run.sh   → bash setting/run.sh   (legacy)
+      5. setting/main.py  → python3 setting/main.py (legacy)
+
+    Logs are written to run.log / error.log at the experiment root (new) or
+    output/run.log / output/error.log (legacy, if output/ dir already exists).
     """
 
     def __init__(self, default_timeout: float = 3600.0) -> None:
@@ -56,9 +64,17 @@ class ScriptExecutor:
     ) -> ExecutionResult:
         """Execute the experiment inside experiment_dir, streaming output to log files.
 
-        Startup logic (in priority order):
-          1. If setting/run.sh exists → execute via ``bash setting/run.sh``
-          2. Otherwise               → execute via ``python3 setting/main.py``
+        Script discovery order (root-first, then setting/ for legacy compat):
+          1. run.sh            → bash run.sh
+          2. train.py          → python3 train.py
+          3. main.py           → python3 main.py
+          4. setting/run.sh    → bash setting/run.sh   (legacy)
+          5. setting/main.py   → python3 setting/main.py (legacy)
+
+        Log files:
+          - New layout:    <exp_dir>/run.log, <exp_dir>/error.log
+          - Legacy layout: <exp_dir>/output/run.log, <exp_dir>/output/error.log
+            (used when <exp_dir>/output/ already exists)
 
         Process lifecycle:
           If task_id already has an active process (from a previous run), it is
@@ -93,20 +109,38 @@ class ScriptExecutor:
             except ProcessLookupError:
                 pass  # Already dead
 
-        output_dir = experiment_dir / "output"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        run_log_path = output_dir / "run.log"
-        error_log_path = output_dir / "error.log"
-
-        # --- Determine launch command (run.sh vs main.py) ---
-        run_sh = experiment_dir / "setting" / "run.sh"
-        if run_sh.exists():
-            cmd = ["bash", "setting/run.sh"]
-            logger.info("Found run.sh, using bash setting/run.sh (cwd=%s)", experiment_dir)
+        # --- Determine log paths (new root layout vs legacy output/ subdir) ---
+        legacy_output_dir = experiment_dir / "output"
+        if legacy_output_dir.exists():
+            # Preserve existing layout for old experiments
+            log_dir = legacy_output_dir
         else:
+            log_dir = experiment_dir
+        run_log_path = log_dir / "run.log"
+        error_log_path = log_dir / "error.log"
+
+        # --- Determine launch command (root-first, then legacy setting/) ---
+        if (experiment_dir / "run.sh").exists():
+            cmd = ["bash", "run.sh"]
+            logger.info("Found run.sh at root, using bash run.sh (cwd=%s)", experiment_dir)
+        elif (experiment_dir / "train.py").exists():
+            cmd = ["python3", "train.py"]
+            logger.info("Found train.py at root (cwd=%s)", experiment_dir)
+        elif (experiment_dir / "main.py").exists():
+            cmd = ["python3", "main.py"]
+            logger.info("Found main.py at root (cwd=%s)", experiment_dir)
+        elif (experiment_dir / "setting" / "run.sh").exists():
+            cmd = ["bash", "setting/run.sh"]
+            logger.info("Found legacy setting/run.sh (cwd=%s)", experiment_dir)
+        elif (experiment_dir / "setting" / "main.py").exists():
             script_path = experiment_dir / "setting" / "main.py"
             cmd = ["python3", str(script_path)]
-            logger.info("Executing script: %s  (timeout=%.0fs, cwd=%s)", script_path, effective_timeout, experiment_dir)
+            logger.info("Found legacy setting/main.py: %s (timeout=%.0fs)", script_path, effective_timeout)
+        else:
+            raise FileNotFoundError(
+                f"No executable entry point found in {experiment_dir}. "
+                "Expected one of: run.sh, train.py, main.py, setting/run.sh, setting/main.py"
+            )
 
         start = time.monotonic()
         proc = await asyncio.create_subprocess_exec(
