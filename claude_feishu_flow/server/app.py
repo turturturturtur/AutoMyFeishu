@@ -143,6 +143,9 @@ def create_app(config: Config) -> FastAPI:
     from claude_feishu_flow.server.routes import router
     app.include_router(router)
 
+    from claude_feishu_flow.server.web import router as web_router
+    app.include_router(web_router)
+
     return app
 
 
