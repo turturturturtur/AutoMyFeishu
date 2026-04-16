@@ -15,7 +15,10 @@ Experiments/*
 .vscode/
 
 # Logs
+logs/
 *.log
+*.png
+*.pdf
 
 # Test cache
 .pytest_cache/
