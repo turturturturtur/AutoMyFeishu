@@ -120,6 +120,7 @@ class KimiClient:
         workspace_dir: Path,
         is_edit_mode: bool = False,
         images: Optional[list[dict]] = None,
+        user_exp_dir: Optional[Path] = None,
     ) -> str:
         """Generate plan.md and main.py via Kimi function-calling loop.
 
@@ -132,7 +133,7 @@ class KimiClient:
         Raises:
             RuntimeError: If Kimi never saves main.py within _MAX_ROUNDS.
         """
-        system_prompt = build_system_prompt()
+        system_prompt = build_system_prompt(user_exp_dir=user_exp_dir)
 
         if is_edit_mode:
             plan_path = workspace_dir / "setting" / "plan.md"
@@ -357,6 +358,7 @@ class KimiClient:
         images: list[dict] | None = None,
         history: list[dict] | None = None,
         scheduler=None,
+        user_exp_dir: Optional[Path] = None,
     ) -> MainAgentResult:
         """Orchestrator agent (Kimi): understands natural language and triggers experiment operations.
 
@@ -405,7 +407,7 @@ class KimiClient:
 
         # Working copy for the tool-use loop: system + history snapshot
         messages: list[dict] = [
-            {"role": "system", "content": build_main_agent_prompt()},
+            {"role": "system", "content": build_main_agent_prompt(user_exp_dir=user_exp_dir)},
         ] + list(history)
         response = None
         _plot_path: str | None = None
@@ -694,7 +696,7 @@ class KimiClient:
 
             messages.append({"role": "user", "content": next_msg})
 
-    async def fix_experiment(self, exp_dir: Path, error_log: str) -> str:
+    async def fix_experiment(self, exp_dir: Path, error_log: str, user_exp_dir: Optional[Path] = None) -> str:
         """Debug and fix a failing main.py via tool-use loop.
 
         Returns:
@@ -703,7 +705,7 @@ class KimiClient:
         Raises:
             RuntimeError: If Kimi does not save a fixed main.py within _MAX_ROUNDS.
         """
-        system_prompt = build_fix_system_prompt()
+        system_prompt = build_fix_system_prompt(user_exp_dir=user_exp_dir)
         main_path = exp_dir / "setting" / "main.py"
         current_code = main_path.read_text(encoding="utf-8") if main_path.exists() else ""
 
@@ -788,7 +790,7 @@ class KimiClient:
 
     _REVIEW_MAX_ROUNDS = 15
 
-    async def review_experiment(self, exp_dir: Path, instruction: str) -> str:
+    async def review_experiment(self, exp_dir: Path, instruction: str, user_exp_dir: Optional[Path] = None) -> str:
         """Run Review Agent on generated plan.md + main.py; may auto-fix main.py via save_script.
 
         Args:
@@ -803,7 +805,7 @@ class KimiClient:
         plan_text = plan_path.read_text(encoding="utf-8") if plan_path.exists() else "(plan.md 不存在)"
         script_text = script_path.read_text(encoding="utf-8") if script_path.exists() else "(main.py 不存在)"
 
-        system_prompt = build_review_agent_prompt()
+        system_prompt = build_review_agent_prompt(user_exp_dir=user_exp_dir)
         user_content = (
             f"【用户原始实验意图】\n{instruction}\n\n"
             f"【plan.md 内容】\n```markdown\n{plan_text}\n```\n\n"
@@ -918,6 +920,7 @@ class KimiClient:
         user_text: str,
         exp_dir: Path,
         history: list[dict],
+        user_exp_dir: Optional[Path] = None,
     ) -> SubAgentResult:
         """Handle a single turn of Sub Agent conversation.
 
@@ -932,7 +935,7 @@ class KimiClient:
 
         history.append({"role": "user", "content": user_text})
 
-        system_prompt = build_sub_agent_system_prompt(task_id, str(exp_dir))
+        system_prompt = build_sub_agent_system_prompt(task_id, str(exp_dir), user_exp_dir=user_exp_dir)
         response = None
         needs_restart = False
 

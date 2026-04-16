@@ -4,15 +4,27 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Optional
 
 
-def _get_global_rules() -> str:
-    """Read GLOBAL_RULES.md from the project root if it exists."""
-    rules_path = Path(os.getcwd()) / "GLOBAL_RULES.md"
-    if rules_path.exists():
-        content = rules_path.read_text(encoding="utf-8").strip()
-        return f"\n\n【全局环境与物理机约束】\n{content}\n"
-    return ""
+def _get_global_rules(user_exp_dir: Optional[Path] = None) -> str:
+    """Read global and per-user GLOBAL_RULES.md and merge them.
+
+    Always reads the team-wide GLOBAL_RULES.md from the project root (cwd).
+    If user_exp_dir is provided and contains its own GLOBAL_RULES.md, that
+    file is appended as user-specific constraints.
+    """
+    parts: list[str] = []
+    global_path = Path(os.getcwd()) / "GLOBAL_RULES.md"
+    if global_path.exists():
+        content = global_path.read_text(encoding="utf-8").strip()
+        parts.append(f"\n\n【全局环境与物理机约束】\n{content}\n")
+    if user_exp_dir is not None:
+        user_rules = user_exp_dir / "GLOBAL_RULES.md"
+        if user_rules.exists():
+            user_content = user_rules.read_text(encoding="utf-8").strip()
+            parts.append(f"\n\n【用户专属约束】\n{user_content}\n")
+    return "".join(parts)
 
 
 def build_edit_chat_system_prompt() -> str:
@@ -57,7 +69,7 @@ def build_edit_chat_system_prompt() -> str:
 """
 
 
-def build_fix_system_prompt() -> str:
+def build_fix_system_prompt(user_exp_dir: Optional[Path] = None) -> str:
     return """\
 你是一个高级 Debugger。之前的 Python 脚本运行失败报错。
 请分析 error_log，修改代码解决这个 bug，并使用 save_script 工具将修复后的代码重新覆盖保存到 main.py 中。
@@ -67,10 +79,10 @@ def build_fix_system_prompt() -> str:
 1. **绝对禁止** Markdown 表格（含 | 的语法），改用列表或 ```text 代码块
 2. **绝对禁止** LaTeX 数学公式（$...$ 或 $$...$$），改用纯文本伪代码
 3. 禁止使用 ## 标题，改用 **标题名称** 加粗代替
-""" + _get_global_rules()
+""" + _get_global_rules(user_exp_dir)
 
 
-def build_review_agent_prompt() -> str:
+def build_review_agent_prompt(user_exp_dir: Optional[Path] = None) -> str:
     """System prompt for the Review Agent (Phase B of the experiment pipeline)."""
     return """\
 你是一位资深的 AI 算法架构师和 Code Reviewer。你正在审查由初级工程师为用户需求生成的实验代码。
@@ -97,7 +109,7 @@ def build_review_agent_prompt() -> str:
 1. **绝对禁止** Markdown 表格（含 | 的语法），改用列表
 2. **绝对禁止** LaTeX 数学公式（$...$ 或 $$...$$），改用纯文本伪代码
 3. 禁止使用 ## 标题，改用 **标题名称** 加粗代替
-""" + _get_global_rules()
+""" + _get_global_rules(user_exp_dir)
 
 
 def build_summarize_system_prompt() -> str:
@@ -119,7 +131,7 @@ def build_summarize_system_prompt() -> str:
 """
 
 
-def build_system_prompt() -> str:
+def build_system_prompt(user_exp_dir: Optional[Path] = None) -> str:
     return """\
 你是一个精通机器学习和自动化的 AI 实验助手。
 
@@ -162,7 +174,7 @@ def build_system_prompt() -> str:
 1. 你必须先调用 save_script 写入 plan.md。
 2. 紧接着，你必须再次调用 save_script 写入 main.py（以及如果需要的 run.sh）。
 3. 当 main.py 写入完成后，不要再做任何无意义的回复，请立即停止对话！
-""" + _get_global_rules()
+""" + _get_global_rules(user_exp_dir)
 
 
 def build_casual_chat_prompt() -> str:
@@ -183,7 +195,7 @@ def build_casual_chat_prompt() -> str:
 """
 
 
-def build_main_agent_prompt() -> str:
+def build_main_agent_prompt(user_exp_dir: Optional[Path] = None) -> str:
     """System prompt for the Orchestrator Agent (Main Agent)."""
     return """\
 你是一个资深 MLOps 专家和实验管理统筹大管家，负责与用户进行自然语言对话并根据意图自动触发相应操作。
@@ -247,10 +259,10 @@ def build_main_agent_prompt() -> str:
    - <font color='green'>成功/正常</font>
    - <font color='red'>错误/警告</font>
    - <font color='grey'>辅助说明/备注</font>
-""" + _get_global_rules()
+""" + _get_global_rules(user_exp_dir)
 
 
-def build_sub_agent_system_prompt(task_id: str, exp_dir_str: str) -> str:
+def build_sub_agent_system_prompt(task_id: str, exp_dir_str: str, user_exp_dir: Optional[Path] = None) -> str:
     """Build the system prompt for Sub Agent (experiment monitor assistant)."""
     return f"""\
 你是一个实验全生命周期管理助手（Sub Agent），负责管理实验 {task_id} 的代码、运行状态和日志。
@@ -295,4 +307,4 @@ def build_sub_agent_system_prompt(task_id: str, exp_dir_str: str) -> str:
    - <font color='green'>成功/正常</font>
    - <font color='red'>错误/警告</font>
    - <font color='grey'>辅助说明/备注</font>
-""" + _get_global_rules()
+""" + _get_global_rules(user_exp_dir)

@@ -110,6 +110,7 @@ class ClaudeClient:
         workspace_dir: Path,
         is_edit_mode: bool = False,
         images: Optional[list[dict]] = None,
+        user_exp_dir: Optional[Path] = None,
     ) -> str:
         """Ask Claude to generate plan.md and main.py, saving both via save_script.
 
@@ -183,7 +184,7 @@ class ClaudeClient:
             response = await self._create_message(
                 model=self._model,
                 max_tokens=8192,
-                system=build_system_prompt(),
+                system=build_system_prompt(user_exp_dir=user_exp_dir),
                 tools=ALL_TOOLS,
                 messages=messages,
             )
@@ -369,6 +370,7 @@ class ClaudeClient:
         images: list[dict] | None = None,
         history: list[dict] | None = None,
         scheduler: Any | None = None,
+        user_exp_dir: Optional[Path] = None,
     ) -> MainAgentResult:
         """Orchestrator agent: understands natural language and triggers experiment operations.
 
@@ -422,7 +424,7 @@ class ClaudeClient:
 
         # Use a snapshot for the tool-use loop (history tracks only user/assistant turns)
         messages: list[dict] = list(history)
-        system_prompt = build_main_agent_prompt()
+        system_prompt = build_main_agent_prompt(user_exp_dir=user_exp_dir)
         response = None
         _plot_path: str | None = None
 
@@ -748,7 +750,7 @@ class ClaudeClient:
 
             messages.append({"role": "user", "content": next_msg})
 
-    async def fix_experiment(self, exp_dir: Path, error_log: str) -> str:
+    async def fix_experiment(self, exp_dir: Path, error_log: str, user_exp_dir: Optional[Path] = None) -> str:
         """Ask Claude to debug and fix the failing main.py via save_script.
 
         Uses the same agentic tool-use loop as generate_experiment to preserve
@@ -780,7 +782,7 @@ class ClaudeClient:
             response = await self._create_message(
                 model=self._model,
                 max_tokens=8192,
-                system=build_fix_system_prompt(),
+                system=build_fix_system_prompt(user_exp_dir=user_exp_dir),
                 tools=ALL_TOOLS,
                 messages=messages,
             )
@@ -850,7 +852,7 @@ class ClaudeClient:
 
     _REVIEW_MAX_ROUNDS = 15
 
-    async def review_experiment(self, exp_dir: Path, instruction: str) -> str:
+    async def review_experiment(self, exp_dir: Path, instruction: str, user_exp_dir: Optional[Path] = None) -> str:
         """Run Review Agent on generated plan.md + main.py; may auto-fix main.py via save_script.
 
         Args:
@@ -865,7 +867,7 @@ class ClaudeClient:
         plan_text = plan_path.read_text(encoding="utf-8") if plan_path.exists() else "(plan.md 不存在)"
         script_text = script_path.read_text(encoding="utf-8") if script_path.exists() else "(main.py 不存在)"
 
-        system_prompt = build_review_agent_prompt()
+        system_prompt = build_review_agent_prompt(user_exp_dir=user_exp_dir)
         user_content = (
             f"【用户原始实验意图】\n{instruction}\n\n"
             f"【plan.md 内容】\n```markdown\n{plan_text}\n```\n\n"
@@ -983,6 +985,7 @@ class ClaudeClient:
         user_text: str,
         exp_dir: Path,
         history: list[dict],
+        user_exp_dir: Optional[Path] = None,
     ) -> SubAgentResult:
         """Handle a single turn of Sub Agent conversation.
 
@@ -1004,7 +1007,7 @@ class ClaudeClient:
 
         history.append({"role": "user", "content": user_text})
 
-        system_prompt = build_sub_agent_system_prompt(task_id, str(exp_dir))
+        system_prompt = build_sub_agent_system_prompt(task_id, str(exp_dir), user_exp_dir=user_exp_dir)
         response = None
         needs_restart = False
 

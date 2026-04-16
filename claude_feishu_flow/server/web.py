@@ -116,18 +116,19 @@ async def dashboard() -> FileResponse:
 
 @router.get("/api/experiments")
 async def list_experiments(request: Request) -> list[dict[str, Any]]:
-    """Return metadata for all experiments, sorted newest-first."""
+    """Return metadata for all experiments (all users), sorted newest-first.
+
+    Supports two directory layouts:
+    - New (multi-tenant): Experiments/<open_id>/exp_<uuid>/  → owner = open_id
+    - Legacy (flat):      Experiments/exp_<uuid>/            → owner = "(legacy)"
+    """
     svc = _svc(request)
     base_dir = svc.config.resolved_experiments_dir()
     experiments: list[dict[str, Any]] = []
 
-    for exp_dir in sorted(base_dir.iterdir(), key=lambda p: p.stat().st_ctime, reverse=True):
-        if not exp_dir.is_dir() or not exp_dir.name.startswith("exp_"):
-            continue
+    def _collect(exp_dir: Path, owner: str) -> None:
         task_id = exp_dir.name
         alias = get_experiment_alias(exp_dir)
-
-        # Derive status
         error_log = exp_dir / "output" / "error.log"
         summary = exp_dir / "results" / "summary.md"
         if task_id in svc.executor.active_processes:
@@ -138,32 +139,64 @@ async def list_experiments(request: Request) -> list[dict[str, Any]]:
             status = "Failed"
         else:
             status = "Pending"
-
         created_at = datetime.fromtimestamp(exp_dir.stat().st_ctime, tz=timezone.utc).isoformat()
-
         experiments.append({
             "task_id": task_id,
             "alias": alias,
             "status": status,
             "created_at": created_at,
+            "owner": owner,
             "has_plan": (exp_dir / "setting" / "plan.md").exists(),
             "has_script": (exp_dir / "setting" / "main.py").exists(),
             "has_review": (exp_dir / "setting" / "review.md").exists(),
             "has_summary": summary.exists(),
         })
 
+    if not base_dir.exists():
+        return []
+
+    for entry in base_dir.iterdir():
+        if not entry.is_dir():
+            continue
+        if entry.name.startswith("exp_"):
+            # Legacy flat layout: Experiments/exp_<uuid>/
+            _collect(entry, "(legacy)")
+        else:
+            # New per-user layout: Experiments/<open_id>/exp_<uuid>/
+            for sub in entry.iterdir():
+                if sub.is_dir() and sub.name.startswith("exp_"):
+                    _collect(sub, entry.name)
+
+    experiments.sort(key=lambda e: e["created_at"], reverse=True)
     return experiments
 
 
 @router.get("/api/experiments/{task_id}/logs")
 async def get_logs(task_id: str, request: Request) -> dict[str, str]:
-    """Return the last 100 KB of run.log and error.log for *task_id*."""
+    """Return the last 100 KB of run.log and error.log for *task_id*.
+
+    Searches both legacy flat layout and new per-user layout.
+    """
     svc = _svc(request)
     base_dir = svc.config.resolved_experiments_dir()
-    exp_dir = base_dir / task_id
 
-    if not exp_dir.is_dir():
-        raise HTTPException(status_code=404, detail=f"Experiment {task_id!r} not found")
+    # Check legacy flat layout first
+    flat_candidate = base_dir / task_id
+    if flat_candidate.is_dir():
+        exp_dir: Path = flat_candidate
+    else:
+        # Scan per-user subdirectories
+        found: Path | None = None
+        if base_dir.exists():
+            for owner_dir in base_dir.iterdir():
+                if owner_dir.is_dir() and not owner_dir.name.startswith("exp_"):
+                    candidate = owner_dir / task_id
+                    if candidate.is_dir():
+                        found = candidate
+                        break
+        if found is None:
+            raise HTTPException(status_code=404, detail=f"Experiment {task_id!r} not found")
+        exp_dir = found
 
     return {
         "run_log": _tail_file(exp_dir / "output" / "run.log"),

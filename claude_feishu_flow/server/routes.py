@@ -38,6 +38,34 @@ def _tail_file(path: Path, max_chars: int) -> str:
         return ""
 
 
+def _user_exp_dir(svc, open_id: str) -> Path:  # type: ignore[no-untyped-def]
+    """Return (and auto-create) the per-user experiment root: <experiments_root>/<open_id>/"""
+    path = svc.config.resolved_experiments_dir() / open_id
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _resolve_exp_dir(svc, open_id: str, task_id: str) -> Path | None:  # type: ignore[no-untyped-def]
+    """Find an experiment directory, supporting both new user-scoped and legacy flat layouts."""
+    candidate = _user_exp_dir(svc, open_id) / task_id
+    if candidate.is_dir():
+        return candidate
+    legacy = svc.config.resolved_experiments_dir() / task_id
+    return legacy if legacy.is_dir() else None
+
+
+def _clean_at_mentions(text: str, mention_keys: list[str]) -> str:
+    """Strip Feishu @mention placeholder keys from message text.
+
+    Only removes the exact key strings from the mentions array (e.g. "@_user_1"),
+    leaving all other @ symbols intact to avoid mangling GitHub usernames,
+    HuggingFace model paths, Python decorators, etc.
+    """
+    for key in mention_keys:
+        text = text.replace(key, "")
+    return text.strip()
+
+
 # ---------------------------------------------------------------------------
 # Webhook entry point — must return HTTP 200 within ~50ms
 # ---------------------------------------------------------------------------
@@ -162,6 +190,24 @@ async def feishu_webhook(
             svc.processing_ids.discard(event.message_id)
         return JSONResponse({"code": 0, "msg": "exit_handled"})
 
+    # ── Group chat: only process messages where bot is @-mentioned ────────
+    if event.chat_type == "group":
+        if not event.mentions:
+            # Feishu typically only pushes group messages where bot is @-tagged,
+            # but guard defensively anyway.
+            if event.message_id:
+                svc.processing_ids.discard(event.message_id)
+            return JSONResponse({"code": 0, "msg": "not_mentioned"})
+        bot_oid = svc.config.feishu_bot_open_id
+        if bot_oid and bot_oid not in event.mentions:
+            if event.message_id:
+                svc.processing_ids.discard(event.message_id)
+            return JSONResponse({"code": 0, "msg": "bot_not_mentioned"})
+        # Strip @mention placeholder tokens so they don't pollute commands or LLM input
+        if event.text and event.mention_keys:
+            event.text = _clean_at_mentions(event.text, event.mention_keys)
+            user_text = event.text
+
     # ── parent_id 拦截：引用回复实验卡片 → 直接路由到 Sub Agent ──────────
     if event.parent_id and event.parent_id in svc.msg_to_task:
         target_task_id = svc.msg_to_task[event.parent_id]
@@ -276,7 +322,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
     exp_dir: Path
 
     if user_text.strip() == "/list":
-        await _handle_list(chat_id, svc, reply_message_id=event.message_id)
+        await _handle_list(chat_id, svc, open_id=open_id, reply_message_id=event.message_id)
         return
 
     if user_text.strip() == "/help":
@@ -291,15 +337,15 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
     if alias_match:
         a_task_id = alias_match.group(1)
         a_new_alias = alias_match.group(2).strip()
-        a_exp_dir = svc.config.resolved_experiments_dir() / a_task_id
-        if not a_exp_dir.is_dir():
+        a_exp_dir = _resolve_exp_dir(svc, open_id, a_task_id)
+        if a_exp_dir is None:
             await svc.messaging.send_text(
                 chat_id, f"❌ 实验 {a_task_id} 不存在。", reply_message_id=event.message_id,
             )
         else:
             await handle_rename_experiment(
                 {"task_id": a_task_id, "new_alias": a_new_alias},
-                svc.config.resolved_experiments_dir(),
+                a_exp_dir.parent,
             )
             await svc.messaging.send_text(
                 chat_id, f"✅ 实验已重命名为：{a_new_alias}", reply_message_id=event.message_id,
@@ -317,8 +363,8 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
     review_match = re.match(r'^/review\s+(exp_[0-9a-f-]+)', user_text.strip())
     if review_match:
         r_task_id = review_match.group(1)
-        r_exp_dir = svc.config.resolved_experiments_dir() / r_task_id
-        if not r_exp_dir.exists():
+        r_exp_dir = _resolve_exp_dir(svc, open_id, r_task_id)
+        if r_exp_dir is None:
             await svc.messaging.send_text(
                 chat_id,
                 f"❌ 实验 {r_task_id} 不存在。",
@@ -344,7 +390,9 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
         plan_path = r_exp_dir / "setting" / "plan.md"
         instruction_hint = plan_path.read_text(encoding="utf-8")[:500] if plan_path.exists() else "(无原始意图描述)"
         try:
-            review_report = await svc.ai.review_experiment(r_exp_dir, instruction_hint)
+            review_report = await svc.ai.review_experiment(
+                r_exp_dir, instruction_hint, user_exp_dir=_user_exp_dir(svc, open_id)
+            )
         except Exception as exc:
             logger.exception("review_experiment fast path failed: %s", exc)
             await svc.messaging.send_text(
@@ -381,8 +429,8 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
             return
         task_id = edit_match.group(1)
         instruction = edit_match.group(2).strip()
-        exp_dir = svc.config.resolved_experiments_dir() / task_id
-        if not (exp_dir / "setting" / "main.py").exists():
+        exp_dir = _resolve_exp_dir(svc, open_id, task_id)
+        if exp_dir is None or not (exp_dir / "setting" / "main.py").exists():
             await svc.messaging.send_help_card(
                 receive_id=chat_id,
                 receive_id_type="chat_id",
@@ -465,7 +513,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
             return
 
         task_id = f"exp_{uuid.uuid4()}"
-        exp_dir = svc.config.resolved_experiments_dir() / task_id
+        exp_dir = _user_exp_dir(svc, open_id) / task_id
         for sub in ("setting", "output", "results"):
             (exp_dir / sub).mkdir(parents=True, exist_ok=True)
 
@@ -538,7 +586,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
         if file_text:
             user_text = user_text + file_text
 
-        exp_base_dir = svc.config.resolved_experiments_dir()
+        exp_base_dir = _user_exp_dir(svc, open_id)
         # Retrieve or create persistent history for this chat
         history = svc.main_agent_histories.setdefault(chat_id, [])
         loading_msg_id = await svc.messaging.send_text(
@@ -551,6 +599,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                 images=images if images else None,
                 history=history,
                 scheduler=svc.scheduler,
+                user_exp_dir=exp_base_dir,
             )
             if result.text:
                 await svc.messaging.send_markdown(
@@ -621,8 +670,8 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
 
             elif result.action_type == "review":
                 r_tid = result.action_task_id or ""
-                r_exp_dir = exp_base_dir / r_tid
-                if not r_exp_dir.exists() or not (r_exp_dir / "setting" / "main.py").exists():
+                r_exp_dir = _resolve_exp_dir(svc, open_id, r_tid)
+                if r_exp_dir is None or not (r_exp_dir / "setting" / "main.py").exists():
                     await svc.messaging.send_text(
                         chat_id,
                         f"❌ 实验 {r_tid} 不存在或尚未生成代码。",
@@ -638,7 +687,10 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                     plan_path = r_exp_dir / "setting" / "plan.md"
                     instruction_hint = plan_path.read_text(encoding="utf-8")[:500] if plan_path.exists() else ""
                     try:
-                        review_report = await svc.ai.review_experiment(r_exp_dir, instruction_hint)
+                        review_report = await svc.ai.review_experiment(
+                            r_exp_dir, instruction_hint,
+                            user_exp_dir=exp_base_dir,
+                        )
                     except Exception as exc:
                         logger.exception("review_experiment orchestrator path failed: %s", exc)
                         await svc.messaging.send_text(
@@ -665,6 +717,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                             cron_expr=cron_expr,
                             task_description=task_desc,
                             chat_id=chat_id,
+                            open_id=open_id,
                         )
                         confirm = (
                             f"定时任务已注册 ✅\n"
@@ -694,8 +747,8 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
             elif result.action_type == "rename":
                 r_tid = result.action_task_id or ""
                 new_alias = result.action_instruction or ""
-                r_exp_dir = exp_base_dir / r_tid
-                if not r_exp_dir.is_dir():
+                r_exp_dir = _resolve_exp_dir(svc, open_id, r_tid)
+                if r_exp_dir is None:
                     await svc.messaging.send_text(
                         chat_id,
                         f"❌ 实验 {r_tid} 不存在，无法重命名。",
@@ -704,7 +757,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                 else:
                     await handle_rename_experiment(
                         {"task_id": r_tid, "new_alias": new_alias},
-                        exp_base_dir,
+                        r_exp_dir.parent,
                     )
                     await svc.messaging.send_text(
                         chat_id,
@@ -723,9 +776,12 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                 svc.processing_ids.discard(event.message_id)
 
 
-async def _handle_list(chat_id: str, svc, reply_message_id: str | None = None) -> None:  # type: ignore[no-untyped-def]
-    """List all experiment directories and send a summary card."""
-    experiments_dir = svc.config.resolved_experiments_dir()
+async def _handle_list(chat_id: str, svc, open_id: str = "", reply_message_id: str | None = None) -> None:  # type: ignore[no-untyped-def]
+    """List current user's experiment directories and send a summary card."""
+    if open_id:
+        experiments_dir = _user_exp_dir(svc, open_id)
+    else:
+        experiments_dir = svc.config.resolved_experiments_dir()
     raw_entries = sorted(
         (d for d in experiments_dir.iterdir() if d.is_dir() and d.name.startswith("exp_")),
         key=lambda d: d.stat().st_mtime,
@@ -861,6 +917,7 @@ async def _run_experiment_pipeline(
             workspace_dir=exp_dir,
             is_edit_mode=is_edit_mode,
             images=images if images else None,
+            user_exp_dir=_user_exp_dir(svc, open_id) if open_id else None,
         )
         logger.info("_run_experiment_pipeline Phase A complete: script_path=%s", script_path)
 
@@ -872,7 +929,10 @@ async def _run_experiment_pipeline(
                 "🕵️ 代码审阅中，正在检查实验逻辑与潜在问题...",
                 reply_message_id=reply_message_id,
             )
-            review_report = await svc.ai.review_experiment(exp_dir, instruction or "")
+            review_report = await svc.ai.review_experiment(
+                exp_dir, instruction or "",
+                user_exp_dir=_user_exp_dir(svc, open_id) if open_id else None,
+            )
             (exp_dir / "setting" / "review.md").write_text(review_report, encoding="utf-8")
             logger.info("[%s] Phase B complete, review.md written.", task_id)
             await svc.messaging.send_text(
@@ -893,6 +953,7 @@ async def _run_experiment_pipeline(
             notify=notify,
             reply_message_id=reply_message_id,
             alias=alias,
+            open_id=open_id,
         )
     except asyncio.TimeoutError:
         logger.error("_run_experiment_pipeline task %s timed out", task_id)
@@ -912,9 +973,8 @@ async def _handle_enter_session(
     svc,  # type: ignore[no-untyped-def]
 ) -> None:
     """Handle card button click to enter a Sub Agent session."""
-    exp_dir = svc.config.resolved_experiments_dir() / task_id
-
-    if not exp_dir.exists():
+    exp_dir = _resolve_exp_dir(svc, open_id, task_id)
+    if exp_dir is None:
         await svc.messaging.send_text(
             chat_id,
             f"实验 `{task_id}` 不存在，无法进入会话。",
@@ -944,9 +1004,9 @@ async def _handle_sub_agent_message(
     event=None,  # type: ignore[no-untyped-def]  # WebhookEvent; optional for file extraction
 ) -> None:
     """Forward a user message to the Sub Agent for a specific experiment."""
-    exp_dir = svc.config.resolved_experiments_dir() / task_id
+    exp_dir = _resolve_exp_dir(svc, open_id, task_id)
 
-    if not exp_dir.exists():
+    if exp_dir is None:
         svc.user_sessions.pop(open_id, None)
         svc.sub_agent_histories.pop(task_id, None)
         await svc.messaging.send_text(
@@ -982,6 +1042,7 @@ async def _handle_sub_agent_message(
                 user_text=user_text,
                 exp_dir=exp_dir,
                 history=history,
+                user_exp_dir=_user_exp_dir(svc, open_id),
             )
         await svc.messaging.send_markdown(chat_id, result.text, reply_message_id=event_message_id)
         if result.needs_restart:
@@ -1068,6 +1129,7 @@ async def _run_phase_b_and_c(
     notify,  # async callable(str)
     reply_message_id: str | None = None,
     alias: str | None = None,
+    open_id: str = "",
 ) -> None:
     """Execute setting/main.py with optional self-healing, then run AI analysis
     and send the final experiment card.  Raises on unrecoverable errors."""
@@ -1092,7 +1154,10 @@ async def _run_phase_b_and_c(
             await notify(
                 f"⚠️ 实验报错，正在进行第 {repair_count}/{max_retries} 次自动修复..."
             )
-            await svc.ai.fix_experiment(exp_dir, result.stderr)
+            await svc.ai.fix_experiment(
+                exp_dir, result.stderr,
+                user_exp_dir=_user_exp_dir(svc, open_id) if open_id else None,
+            )
 
     status = "success" if result.returncode == 0 else "failed"
     logger.info(

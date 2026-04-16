@@ -81,6 +81,8 @@ class WebhookEvent:
     image_keys: list = field(default_factory=list)  # image_key values for message_type == "image"
     files: list = field(default_factory=list)  # (file_key, file_name) tuples for message_type == "file"
     parent_id: Optional[str] = None   # 引用回复时，被引用的原始消息 ID
+    mentions: list[str] = field(default_factory=list)   # @提及用户的 open_id 列表
+    mention_keys: list[str] = field(default_factory=list)  # 飞书 mentions[].key 占位符（如 @_user_1），用于文本清洗
     # card.action.trigger fields (button clicks on interactive cards)
     action_tag: Optional[str] = None       # e.g. "button"
     action_value: dict = field(default_factory=dict)  # e.g. {"key": "enter_session", "task_id": "exp_xxx"}
@@ -200,6 +202,19 @@ def parse_webhook_event(raw: dict) -> WebhookEvent:
             logger.warning("Could not parse message content: %r", content_raw)
             text = content_raw
 
+        # Extract @mention metadata from the mentions array
+        mentions_raw: list[dict] = message.get("mentions", [])
+        mentions: list[str] = [
+            m.get("id", {}).get("open_id", "")
+            for m in mentions_raw
+            if m.get("id", {}).get("open_id")
+        ]
+        mention_keys: list[str] = [
+            m.get("key", "")
+            for m in mentions_raw
+            if m.get("key")
+        ]
+
         return WebhookEvent(
             event_type=event_type,
             message_id=message.get("message_id"),
@@ -211,6 +226,8 @@ def parse_webhook_event(raw: dict) -> WebhookEvent:
             image_keys=image_keys,
             files=files,
             parent_id=message.get("parent_id"),
+            mentions=mentions,
+            mention_keys=mention_keys,
             raw=raw,
         )
 

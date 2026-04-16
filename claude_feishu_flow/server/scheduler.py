@@ -84,11 +84,12 @@ class SchedulerManager:
             cron_expr = rec.get("cron_expression", "")
             task_desc = rec.get("task_description", "")
             chat_id = rec.get("chat_id", "")
+            open_id = rec.get("open_id", "")
             if not (job_id and cron_expr and chat_id):
                 logger.warning("Skipping malformed cron record: %r", rec)
                 continue
             try:
-                self.add_cron_job(cron_expr, task_desc, chat_id, restore_id=job_id)
+                self.add_cron_job(cron_expr, task_desc, chat_id, open_id=open_id, restore_id=job_id)
             except Exception:
                 logger.exception("Failed to restore cron job %r", job_id)
         logger.info("Restored %d cron job(s) from %s", len(records), _CRON_JSON)
@@ -102,6 +103,7 @@ class SchedulerManager:
         cron_expr: str,
         task_description: str,
         chat_id: str,
+        open_id: str = "",
         restore_id: str | None = None,
     ) -> str:
         """Register a recurring cron job and return its job_id.
@@ -111,6 +113,8 @@ class SchedulerManager:
                               Example: "0 9 * * *" = daily at 9am.
             task_description: Human-readable description for the trigger prompt.
             chat_id:          Feishu chat_id to send the proactive message to.
+            open_id:          Feishu open_id of the user who created the job;
+                              used to scope the experiment directory at fire time.
             restore_id:       When restoring from JSON, pass the saved job_id so
                               APScheduler uses the same ID. Leave None for new jobs.
 
@@ -144,13 +148,14 @@ class SchedulerManager:
         job = self._scheduler.add_job(
             self._fire,
             trigger,
-            kwargs={"task_description": task_description, "chat_id": chat_id},
+            kwargs={"task_description": task_description, "chat_id": chat_id, "open_id": open_id},
             **add_kwargs,
         )
         self._job_meta[job.id] = {
             "cron_expression": cron_expr,
             "task_description": task_description,
             "chat_id": chat_id,
+            "open_id": open_id,
         }
         logger.info(
             "Cron job registered: id=%s cron=%r task=%r chat=%s",
@@ -255,7 +260,7 @@ class SchedulerManager:
     # Internal callback
     # ------------------------------------------------------------------
 
-    async def _fire(self, task_description: str, chat_id: str) -> None:
+    async def _fire(self, task_description: str, chat_id: str, open_id: str = "") -> None:
         """Callback executed at each cron fire time.
 
         Calls chat_main_agent with a trigger prompt instructing it to
@@ -271,11 +276,20 @@ class SchedulerManager:
                 "请调用 list_experiments 汇总当前所有实验进度，并将结果发送给用户。"
             )
             history = svc.main_agent_histories.setdefault(chat_id, [])
+            # Build user-scoped experiment directory if open_id is known
+            if open_id:
+                exp_base_dir = svc.config.resolved_experiments_dir() / open_id
+                exp_base_dir.mkdir(parents=True, exist_ok=True)
+                user_exp_dir = exp_base_dir
+            else:
+                exp_base_dir = svc.config.resolved_experiments_dir()
+                user_exp_dir = None
             result = await svc.ai.chat_main_agent(
                 user_text=trigger_text,
-                exp_base_dir=svc.config.resolved_experiments_dir(),
+                exp_base_dir=exp_base_dir,
                 history=history,
                 scheduler=self,
+                user_exp_dir=user_exp_dir,
             )
             if result.text:
                 await svc.messaging.send_markdown(chat_id, result.text)
