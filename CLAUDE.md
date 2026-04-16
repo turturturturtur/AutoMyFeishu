@@ -31,10 +31,10 @@
 
 收到消息后，后台任务按四阶段执行：
 
-- **Phase A（生成）**: Claude Agentic 循环调用 `save_script` 工具，生成 `setting/plan.md` 和 `setting/main.py`
-- **Phase B（审阅）**: Review Agent 读取 plan.md 和 main.py，结合用户原始意图进行静态审查；发现问题时自动调用 `save_script` 修复，并将审阅报告写入 `setting/review.md`（非阻塞：Review 失败不中断流水线）
-- **Phase C（执行）**: `ScriptExecutor` 异步 subprocess 运行 main.py，支持 `--retry N` 自愈循环（失败时 Claude 调试 stderr 并修复 main.py）
-- **Phase D（汇报）**: Claude 生成 `results/summary.md`，写入 Bitable，发送飞书消息卡片
+- **Phase A（生成）**: Claude Agentic 循环调用 `save_script` 工具，生成计划文件和实验脚本。对于全新实验写入 `setting/plan.md` 和 `setting/main.py`；对于基于已有仓库的实验直接修改仓库内对应文件。
+- **Phase B（审阅）**: Review Agent 读取计划和代码，结合用户原始意图进行静态审查；发现问题时自动调用 `save_script` 修复（非阻塞：Review 失败不中断流水线）
+- **Phase C（执行）**: `ScriptExecutor` 异步 subprocess 运行实验，支持 `--retry N` 自愈循环（失败时 Claude 调试 stderr 并修复代码）
+- **Phase D（汇报）**: Claude 生成摘要，写入 Bitable，发送飞书消息卡片
 
 ### Session 路由逻辑 (`server/routes.py`)
 
@@ -58,7 +58,9 @@ else:
 
 ## 实验目录结构
 
-每次实验对应 `Experiments/exp_<uuid>/`：
+### 全新空白实验
+
+每次实验对应 `Experiments/<open_id>/exp_<uuid>/`，采用经典三层结构：
 
 ```text
 exp_<uuid>/
@@ -66,12 +68,43 @@ exp_<uuid>/
 │   ├── plan.md      ← Claude Phase A 生成
 │   ├── main.py      ← Claude Phase A 生成（save_script 工具写入）
 │   └── review.md    ← Claude Phase B 审阅报告（Review Agent 写入）
-├── output/
-│   ├── run.log      ← subprocess stdout 实时流
-│   └── error.log    ← subprocess stderr 实时流
-└── results/
-    └── summary.md   ← Claude Phase D 分析报告
+├── run.log          ← subprocess stdout 实时流（新版，直接在根目录）
+├── error.log        ← subprocess stderr 实时流（新版，直接在根目录）
+└── summary.md       ← Claude Phase D 分析报告（新版，直接在根目录）
 ```
+
+> 注：旧版实验的日志在 `output/run.log`、`output/error.log`，摘要在 `results/summary.md`。代码通过 `_find_log()` / `_meta_path()` 辅助函数自动兼容两种布局。
+
+### 基于已有仓库的沙盒实验
+
+用户可在 `Storage/<open_id>/<repo_name>/` 中存放大型代码仓库。启动实验时指定 `base_repo` 参数，系统将通过 `shutil.copytree(symlinks=True)` 将仓库全量克隆到实验沙盒，实验在沙盒中独立进行，不影响主仓库：
+
+```text
+Storage/
+└── <open_id>/
+    └── <repo_name>/        ← 主仓库（用户自行上传/维护）
+
+Experiments/
+└── <open_id>/
+    └── exp_<uuid>/         ← 沙盒（copytree 自主仓库克隆而来）
+        ├── <repo原有文件>/  ← 保持仓库原有目录结构
+        ├── run.log          ← 执行日志
+        ├── error.log
+        └── meta.json        ← 实验元数据（alias、bitable tokens）
+```
+
+**脚本执行优先级**（`runner/executor.py`）：
+1. `run.sh`（根目录）→ `bash run.sh`
+2. `train.py`（根目录）→ `python3 train.py`
+3. `main.py`（根目录）→ `python3 main.py`
+4. `setting/run.sh`（向后兼容）→ `bash setting/run.sh`
+5. `setting/main.py`（向后兼容）→ `python3 setting/main.py`
+
+**代码回写**（`sync_back_repo` 工具）：Sub Agent 在 Smoke Test 通过后调用此工具，将沙盒内的代码改动同步回 Storage 主仓库。安全过滤规则：
+- 仅同步白名单扩展名：`.py .sh .json .yaml .yml .md .txt .cfg .toml .ini .env .rst .ipynb`
+- 跳过软链接（防止复制海量数据集）
+- 跳过超过 5MB 的文件
+- 跳过 `__pycache__`、`.git`、`.pth`、`.ckpt`、`.log` 等二进制/缓存
 
 # 编码规范与底线原则
 1. **异步优先**：所有网络 IO（飞书 API、Claude API）必须使用 `async/await`。
