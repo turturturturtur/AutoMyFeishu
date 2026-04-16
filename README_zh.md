@@ -25,6 +25,8 @@
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square"/>
 </p>
 
+**中文版 | [English](README.md)**
+
 ---
 
 ## 目录
