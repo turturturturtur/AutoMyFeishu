@@ -106,7 +106,7 @@ class KimiClient:
 
     async def _create_completion(self, **kwargs: object):
         """Wrapper around chat.completions.create that records token usage."""
-        response = await self._create_completion(**kwargs)  # type: ignore[arg-type]
+        response = await self._client.chat.completions.create(**kwargs)  # type: ignore[arg-type]
         if response.usage:
             await self._tracker.record(
                 response.usage.prompt_tokens,
