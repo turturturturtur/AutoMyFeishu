@@ -929,9 +929,13 @@ class KimiClient:
         Returns:
             SubAgentResult with Kimi's text reply and a needs_restart flag.
         """
-        # Trim history to prevent unbounded growth
+        # Trim history to prevent unbounded growth.
+        # Must start at a user message boundary so no orphaned tool messages
+        # (referencing a deleted assistant tool_calls entry) are sent to the API.
         if len(history) > self._SUB_AGENT_HISTORY_TRIM_THRESHOLD:
-            del history[: len(history) - self._SUB_AGENT_HISTORY_KEEP]
+            history[:] = history[-self._SUB_AGENT_HISTORY_KEEP :]
+            while history and history[0]["role"] != "user":
+                history.pop(0)
 
         history.append({"role": "user", "content": user_text})
 
