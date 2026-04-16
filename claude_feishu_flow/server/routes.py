@@ -489,6 +489,13 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
             svc.processing_ids.discard(event.message_id)
         return
 
+    # ── Extract --retry N (applies to all paths below) ───────────────────
+    retry_match = re.search(r'\s*--retry\s+(\d+)', user_text)
+    max_retries: int = int(retry_match.group(1)) if retry_match else svc.config.default_max_retries
+    if retry_match:
+        user_text = (user_text[:retry_match.start()] + user_text[retry_match.end():]).strip()
+
+    # ── /edit: validate then redirect to Main Agent ───────────────────────
     if user_text.startswith("/edit"):
         edit_match = re.match(r'^/edit\s+(exp_[0-9a-f-]+)\s+(\S.*)', user_text, re.DOTALL)
         if not edit_match:
@@ -503,49 +510,38 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                 reply_message_id=event.message_id,
             )
             return
-        task_id = edit_match.group(1)
-        instruction = edit_match.group(2).strip()
-        exp_dir = _resolve_exp_dir(svc, open_id, task_id)
-        if exp_dir is None or not (exp_dir / "setting" / "main.py").exists():
-            await svc.messaging.send_help_card(
-                receive_id=chat_id,
-                receive_id_type="chat_id",
-                error_msg=f"实验 `{task_id}` 不存在或尚未生成脚本，无法编辑。",
+        edit_task_id = edit_match.group(1)
+        edit_instruction = edit_match.group(2).strip()
+        # Transform into a system directive for the Main Agent so it always
+        # goes through the Orchestrator (which enforces sandbox isolation).
+        user_text = (
+            f"【系统强制指令】用户明确要求修改实验 {edit_task_id}。"
+            f"请立刻调用 edit_experiment。用户指令：{edit_instruction}"
+        )
+        logger.info("/edit intercepted and redirected to Main Agent: task_id=%s", edit_task_id)
+        # Fall through to the routing block below (will hit the else branch)
+
+    # ── /launch: validate then redirect to Main Agent ────────────────────
+    if user_text.startswith("/launch"):
+        launch_text = user_text[len("/launch"):].strip()
+        if not launch_text and not event.image_keys and not event.files:
+            await svc.messaging.send_text(
+                chat_id,
+                "请在 /launch 后附上实验指令，例如：/launch 训练一个线性回归模型",
                 reply_message_id=event.message_id,
             )
+            if event.message_id:
+                svc.processing_ids.discard(event.message_id)
             return
-
-        # Extract --retry N from the instruction
-        retry_match = re.search(r'\s*--retry\s+(\d+)', instruction)
-        max_retries: int = int(retry_match.group(1)) if retry_match else svc.config.default_max_retries
-        if retry_match:
-            instruction = (instruction[:retry_match.start()] + instruction[retry_match.end():]).strip()
-
-        from claude_feishu_flow.server.app import EditSession
-        session = EditSession(
-            task_id=task_id,
-            exp_dir_str=str(exp_dir),
-            queue=asyncio.Queue(),
-            max_retries=max_retries,
+        # Transform into a system directive for the Main Agent so absolute
+        # host paths are always intercepted by import_local_repo first.
+        user_text = (
+            "【系统强制指令】用户明确要求启动新实验。"
+            "请仔细检查以下指令，如果包含宿主机绝对路径，必须先调用 import_local_repo "
+            f"导入，然后再调用 launch_experiment 启动实验。用户指令：{launch_text}"
         )
-        svc.edit_sessions[chat_id] = session
-
-        asyncio.create_task(
-            _handle_edit_session(
-                chat_id=chat_id,
-                session=session,
-                initial_instruction=instruction,
-                svc=svc,
-                event_message_id=event.message_id,
-            )
-        )
-        return
-
-    # ── Extract --retry N ─────────────────────────────────────────────────
-    retry_match = re.search(r'\s*--retry\s+(\d+)', user_text)
-    max_retries: int = int(retry_match.group(1)) if retry_match else svc.config.default_max_retries
-    if retry_match:
-        user_text = (user_text[:retry_match.start()] + user_text[retry_match.end():]).strip()
+        logger.info("/launch intercepted and redirected to Main Agent")
+        # Fall through to the routing block below (will hit the else branch)
 
     if user_text.startswith("/write"):
         # ── /write Fast Path ──────────────────────────────────────────────
@@ -573,71 +569,6 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                 reply_message_id=event.message_id,
             )
         )
-        if event.message_id:
-            svc.processing_ids.discard(event.message_id)
-
-    elif user_text.startswith("/launch"):
-        # ── /launch Fast Path ─────────────────────────────────────────────
-        launch_text = user_text[len("/launch"):].strip()
-        if not launch_text and not event.image_keys and not event.files:
-            await svc.messaging.send_text(
-                chat_id,
-                "请在 /launch 后附上实验指令，例如：/launch 训练一个线性回归模型",
-                reply_message_id=event.message_id,
-            )
-            if event.message_id:
-                svc.processing_ids.discard(event.message_id)
-            return
-
-        task_id = f"exp_{uuid.uuid4()}"
-        exp_dir = _user_exp_dir(svc, open_id) / task_id
-        exp_dir.mkdir(parents=True, exist_ok=True)
-
-        logger.info(
-            "/launch fast path: task_id=%s chat_id=%s max_retries=%d exp_dir=%s",
-            task_id, chat_id, max_retries, exp_dir,
-        )
-
-        # Download and archive images
-        images: list[dict] = []
-        if event.image_keys and event.message_id:
-            setting_dir = exp_dir / "setting"
-            for idx, img_key in enumerate(event.image_keys, start=1):
-                try:
-                    img_bytes = await svc.feishu.download_resource(
-                        message_id=event.message_id,
-                        file_key=img_key,
-                    )
-                    save_path = setting_dir / f"input_image_{idx}.jpg"
-                    save_path.write_bytes(img_bytes)
-                    b64 = base64.b64encode(img_bytes).decode("utf-8")
-                    images.append({"media_type": "image/jpeg", "base64_data": b64})
-                    logger.info("Downloaded and archived image %s → %s", img_key, save_path)
-                except Exception as exc:
-                    logger.warning("Failed to download image %s: %s", img_key, exc)
-
-        # Extract and append file attachment text
-        file_text = await _extract_file_contents(event, svc)
-        if file_text:
-            launch_text = launch_text + file_text
-
-        loading_msg_id = await svc.messaging.send_text(
-            chat_id, "⏳ 正在处理中，请稍候...", reply_message_id=event.message_id
-        )
-        # _run_experiment_pipeline handles its own exceptions and notifications
-        asyncio.create_task(_run_experiment_pipeline(
-            svc=svc,
-            chat_id=chat_id,
-            open_id=open_id,
-            instruction=launch_text,
-            task_id=task_id,
-            exp_dir=exp_dir,
-            is_edit_mode=False,
-            max_retries=max_retries,
-            reply_message_id=event.message_id,
-            images=images if images else None,
-        ))
-        await svc.messaging.delete_message(loading_msg_id)
         if event.message_id:
             svc.processing_ids.discard(event.message_id)
 
