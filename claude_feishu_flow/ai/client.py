@@ -44,6 +44,21 @@ logger = logging.getLogger(__name__)
 _MAX_ROUNDS = 30  # raised to accommodate max_tokens continuation rounds
 
 
+def safe_trim_history(history: list[dict], max_len: int = 40, keep_len: int = 20) -> None:
+    """Trim history in-place, never cutting mid tool-call/result pair.
+
+    After slicing to the last *keep_len* entries we pop from the front until
+    the first message is a clean ``user`` role.  This guarantees no orphaned
+    ``tool_use`` / ``tool_result`` blocks at the boundary, which would cause
+    a 400 Bad Request from the Anthropic API.
+    """
+    if len(history) <= max_len:
+        return
+    history[:] = history[-keep_len:]
+    while history and history[0].get("role") != "user":
+        history.pop(0)
+
+
 @dataclass
 class SubAgentResult:
     """Return value from chat_with_sub_agent.
@@ -404,11 +419,7 @@ class ClaudeClient:
         if history is None:
             history = []
 
-        # Trim history to prevent unbounded growth (ensure starts with user role after trim)
-        if len(history) > 40:
-            history[:] = history[-20:]
-            while history and history[0]["role"] != "user":
-                history.pop(0)
+        safe_trim_history(history)
 
         content: list = []
         if images:
@@ -426,8 +437,6 @@ class ClaudeClient:
         # Append this turn's user message to persistent history
         history.append({"role": "user", "content": content})
 
-        # Use a snapshot for the tool-use loop (history tracks only user/assistant turns)
-        messages: list[dict] = list(history)
         system_prompt = build_main_agent_prompt(user_exp_dir=user_exp_dir)
         response = None
         _plot_path: str | None = None
@@ -439,18 +448,17 @@ class ClaudeClient:
                 max_tokens=2048,
                 system=system_prompt,
                 tools=MAIN_AGENT_TOOLS,
-                messages=messages,
+                messages=history,
             )
-            messages.append({"role": "assistant", "content": response.content})
+            history.append({"role": "assistant", "content": response.content})
 
             tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
 
             if not tool_use_blocks:
+                # Already appended response.content to history above; extract text for return value
                 for block in response.content:
                     if block.type == "text":
-                        history.append({"role": "assistant", "content": block.text})
                         return MainAgentResult(text=block.text, plot_path=_plot_path)
-                history.append({"role": "assistant", "content": "(未返回有效回复)"})
                 return MainAgentResult(text="(未返回有效回复)", plot_path=_plot_path)
 
             # Extract any partial text reply that accompanies tool calls
@@ -645,21 +653,19 @@ class ClaudeClient:
                         "content": f"Unknown tool: {tool_name}",
                     })
 
-            # Blocking tool found — save summary to history and exit
+            # Blocking tool found — append tool results to history and exit
             if action_result is not None:
-                history.append({"role": "assistant", "content": action_result.text})
+                history.append({"role": "user", "content": tool_results})
                 return action_result
 
-            # Inline tools — feed results back and continue
-            messages.append({"role": "user", "content": tool_results})
+            # Inline tools — feed results back into history and continue
+            history.append({"role": "user", "content": tool_results})
 
-        # Fallback after max rounds
+        # Fallback after max rounds — response.content already in history
         if response is not None:
             for block in response.content:
                 if block.type == "text":
-                    history.append({"role": "assistant", "content": block.text})
                     return MainAgentResult(text=block.text, plot_path=_plot_path)
-        history.append({"role": "assistant", "content": "(未返回有效回复)"})
         return MainAgentResult(text="(未返回有效回复)", plot_path=_plot_path)
 
     async def chat_edit(
@@ -1045,9 +1051,13 @@ class ClaudeClient:
         Returns:
             SubAgentResult with Claude's text reply and a needs_restart flag.
         """
-        # Trim history to prevent unbounded growth
-        if len(history) > self._SUB_AGENT_HISTORY_TRIM_THRESHOLD:
-            del history[: len(history) - self._SUB_AGENT_HISTORY_KEEP]
+        # Trim history to prevent unbounded growth; safe_trim_history ensures no
+        # orphaned tool_use/tool_result pairs at the boundary.
+        safe_trim_history(
+            history,
+            max_len=self._SUB_AGENT_HISTORY_TRIM_THRESHOLD,
+            keep_len=self._SUB_AGENT_HISTORY_KEEP,
+        )
 
         history.append({"role": "user", "content": user_text})
 
@@ -1195,5 +1205,23 @@ class ClaudeClient:
                 if block.type == "text":
                     reply_parts.append(block.text)
 
-        reply_text = "\n".join(reply_parts) if reply_parts else "操作已执行完毕。"
+        if not reply_parts:
+            # Model executed tools but produced no closing text — ask for a summary
+            history.append({"role": "user", "content": "请总结你刚才的操作。"})
+            try:
+                summary_resp = await self._create_message(
+                    model=self._model,
+                    max_tokens=512,
+                    system=system_prompt,
+                    tools=[],
+                    messages=history,
+                )
+                for block in summary_resp.content:
+                    if block.type == "text":
+                        reply_parts.append(block.text)
+                history.append({"role": "assistant", "content": summary_resp.content})
+            except Exception as exc:
+                logger.warning("Summary call failed for task=%s: %s", task_id, exc)
+
+        reply_text = "\n".join(reply_parts) if reply_parts else "(操作完成)"
         return SubAgentResult(text=reply_text, needs_restart=needs_restart)

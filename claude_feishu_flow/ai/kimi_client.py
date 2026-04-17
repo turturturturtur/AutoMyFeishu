@@ -56,6 +56,21 @@ logger = logging.getLogger(__name__)
 _MAX_ROUNDS = 30
 _KIMI_BASE_URL = "https://api.moonshot.cn/v1"
 
+
+def safe_trim_history(history: list[dict], max_len: int = 40, keep_len: int = 20) -> None:
+    """Trim history in-place, never cutting mid tool-call/result pair.
+
+    After slicing to the last *keep_len* entries we pop from the front until
+    the first message is a clean ``user`` role.  This guarantees no orphaned
+    ``tool_calls`` / ``tool`` (result) blocks at the boundary, which would
+    cause a 400 Bad Request from the OpenAI-compatible API.
+    """
+    if len(history) <= max_len:
+        return
+    history[:] = history[-keep_len:]
+    while history and history[0].get("role") != "user":
+        history.pop(0)
+
 # Pre-convert tool schemas once at import time
 _ALL_OAI_TOOLS = convert_to_openai_tools(ALL_TOOLS)
 _SUB_AGENT_OAI_TOOLS = convert_to_openai_tools(SUB_AGENT_TOOLS)
@@ -390,11 +405,7 @@ class KimiClient:
         if history is None:
             history = []
 
-        # Trim history to prevent unbounded growth (ensure starts with user role after trim)
-        if len(history) > 40:
-            history[:] = history[-20:]
-            while history and history[0]["role"] != "user":
-                history.pop(0)
+        safe_trim_history(history)
 
         user_content: list = []
         if images:
@@ -408,10 +419,8 @@ class KimiClient:
         # Append this turn's user message to persistent history
         history.append({"role": "user", "content": user_content})
 
-        # Working copy for the tool-use loop: system + history snapshot
-        messages: list[dict] = [
-            {"role": "system", "content": build_main_agent_prompt(user_exp_dir=user_exp_dir)},
-        ] + list(history)
+        # Working copy for the tool-use loop: system prompt + history
+        system_msg = {"role": "system", "content": build_main_agent_prompt(user_exp_dir=user_exp_dir)}
         response = None
         _plot_path: str | None = None
 
@@ -420,19 +429,19 @@ class KimiClient:
             response = await self._create_completion(
                 model=self._model,
                 max_tokens=2048,
-                messages=messages,
+                messages=[system_msg] + history,
                 tools=_MAIN_AGENT_OAI_TOOLS,
                 tool_choice="auto",
             )
 
             msg = response.choices[0].message
             finish_reason = response.choices[0].finish_reason
-            messages.append(msg.model_dump(exclude_unset=True))
+            history.append(msg.model_dump(exclude_unset=True))
 
             if not msg.tool_calls:
                 content = msg.content
                 text = content if content else "(未返回有效回复)"
-                history.append({"role": "assistant", "content": text})
+                # msg already appended to history above; just return
                 return MainAgentResult(text=text, plot_path=_plot_path)
 
             reply_text: str = msg.content or ""
@@ -440,7 +449,7 @@ class KimiClient:
             # Truncated mid-tool-call: feed error and retry
             if finish_reason == "length" and msg.tool_calls:
                 for tc in msg.tool_calls:
-                    messages.append({
+                    history.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "content": (
@@ -467,7 +476,7 @@ class KimiClient:
                         action_instruction=tool_input.get("instruction", ""),
                         action_alias=tool_input.get("alias") or None,
                     )
-                    messages.append({
+                    history.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "content": "launch_experiment 已触发，系统将接管后续流程。",
@@ -480,7 +489,7 @@ class KimiClient:
                         action_task_id=tool_input.get("task_id", ""),
                         action_instruction=tool_input.get("instruction", ""),
                     )
-                    messages.append({
+                    history.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "content": "edit_experiment 已触发，系统将接管后续流程。",
@@ -492,7 +501,7 @@ class KimiClient:
                         action_type="review",
                         action_task_id=tool_input.get("task_id", ""),
                     )
-                    messages.append({
+                    history.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "content": "review_experiment 已触发，系统将接管审阅流程。",
@@ -507,7 +516,7 @@ class KimiClient:
                             "task_description": tool_input.get("task_description", ""),
                         }),
                     )
-                    messages.append({
+                    history.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "content": "create_cron_job 已触发，系统将注册定时任务。",
@@ -520,7 +529,7 @@ class KimiClient:
                         action_instruction=tool_input.get("instruction", user_text),
                         action_task_id=tool_input.get("related_task_id"),
                     )
-                    messages.append({
+                    history.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "content": "write_document 已触发，系统将接管文稿生成流程。",
@@ -531,21 +540,21 @@ class KimiClient:
                         result_text = await handle_rename_experiment(tool_input, exp_base_dir)
                     except Exception as exc:
                         result_text = f"工具执行失败：{exc}"
-                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+                    history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
 
                 elif tool_name == "execute_bash_command":
                     try:
                         result_text = await handle_execute_bash(tool_input, Path("."))
                     except Exception as exc:
                         result_text = f"工具执行失败：{exc}"
-                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+                    history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
 
                 elif tool_name == "list_experiments":
                     try:
                         result_text = await handle_list_experiments(exp_base_dir)
                     except Exception as exc:
                         result_text = f"工具执行失败：{exc}"
-                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+                    history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
 
                 elif tool_name == "plot_experiment_metrics":
                     try:
@@ -557,21 +566,21 @@ class KimiClient:
                         tool_result_text = "图表已成功生成并保存到 results/plot.png，将自动发送给用户。"
                     else:
                         tool_result_text = result_str
-                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result_text})
+                    history.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result_text})
 
                 elif tool_name == "list_cron_jobs":
                     if scheduler is not None:
                         result_text = scheduler.list_jobs()
                     else:
                         result_text = "定时任务功能未启用（scheduler 未初始化）。"
-                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+                    history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
 
                 elif tool_name == "cancel_cron_job":
                     if scheduler is not None:
                         result_text = scheduler.cancel_job(tool_input.get("job_id", ""))
                     else:
                         result_text = "定时任务功能未启用（scheduler 未初始化）。"
-                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+                    history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
 
                 elif tool_name == "write_bitable":
                     if svc is None or not open_id:
@@ -584,7 +593,7 @@ class KimiClient:
                             table_name=tool_input.get("table_name", "Test_Table"),
                             test_message=tool_input.get("test_message", ""),
                         )
-                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+                    history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
 
                 elif tool_name == "import_local_repo":
                     if not open_id or svc is None:
@@ -597,28 +606,25 @@ class KimiClient:
                             storage_base_dir=svc.config.resolved_storage_dir(),
                             open_id=open_id,
                         )
-                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+                    history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
 
                 else:
-                    messages.append({
+                    history.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "content": f"Unknown tool: {tool_name}",
                     })
 
-            # Blocking tool found — save summary to history and exit
+            # Blocking tool found — tool result already in history; exit
             if action_result is not None:
-                history.append({"role": "assistant", "content": action_result.text})
                 return action_result
             # Inline tools — continue loop
 
-        # Fallback after max rounds
+        # Fallback after max rounds — response msg already in history
         if response is not None:
             content = response.choices[0].message.content
             text = content if content else "(未返回有效回复)"
-            history.append({"role": "assistant", "content": text})
             return MainAgentResult(text=text, plot_path=_plot_path)
-        history.append({"role": "assistant", "content": "(未返回有效回复)"})
         return MainAgentResult(text="(未返回有效回复)", plot_path=_plot_path)
 
     async def chat_edit(
@@ -961,13 +967,13 @@ class KimiClient:
         Returns:
             SubAgentResult with Kimi's text reply and a needs_restart flag.
         """
-        # Trim history to prevent unbounded growth.
-        # Must start at a user message boundary so no orphaned tool messages
-        # (referencing a deleted assistant tool_calls entry) are sent to the API.
-        if len(history) > self._SUB_AGENT_HISTORY_TRIM_THRESHOLD:
-            history[:] = history[-self._SUB_AGENT_HISTORY_KEEP :]
-            while history and history[0]["role"] != "user":
-                history.pop(0)
+        # Trim history to prevent unbounded growth; safe_trim_history ensures no
+        # orphaned tool_calls/tool result pairs at the boundary.
+        safe_trim_history(
+            history,
+            max_len=self._SUB_AGENT_HISTORY_TRIM_THRESHOLD,
+            keep_len=self._SUB_AGENT_HISTORY_KEEP,
+        )
 
         history.append({"role": "user", "content": user_text})
 
@@ -1064,4 +1070,20 @@ class KimiClient:
         if response is not None:
             reply_text = response.choices[0].message.content or ""
 
-        return SubAgentResult(text=reply_text or "操作已执行完毕。", needs_restart=needs_restart)
+        if not reply_text:
+            # Model executed tools but produced no closing text — ask for a summary
+            history.append({"role": "user", "content": "请总结你刚才的操作。"})
+            try:
+                summary_resp = await self._create_completion(
+                    model=self._model,
+                    max_tokens=512,
+                    messages=[{"role": "system", "content": system_prompt}] + history,
+                    tools=[],
+                )
+                reply_text = summary_resp.choices[0].message.content or ""
+                history.append({"role": "assistant", "content": reply_text} if reply_text else
+                               {"role": "assistant", "content": "(操作完成)"})
+            except Exception as exc:
+                logger.warning("Summary call failed for task=%s: %s", task_id, exc)
+
+        return SubAgentResult(text=reply_text or "(操作完成)", needs_restart=needs_restart)
