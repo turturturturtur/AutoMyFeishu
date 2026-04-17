@@ -137,9 +137,32 @@ class ScriptExecutor:
             cmd = ["python3", str(script_path)]
             logger.info("Found legacy setting/main.py: %s (timeout=%.0fs)", script_path, effective_timeout)
         else:
-            raise FileNotFoundError(
-                f"No executable entry point found in {experiment_dir}. "
-                "Expected one of: run.sh, train.py, main.py, setting/run.sh, setting/main.py"
+            # --- No entry point found: write diagnostic to error.log and return
+            # a non-zero result so the self-healing retry loop can ask Sub Agent
+            # to generate the missing run.sh instead of crashing the pipeline. ---
+            error_msg = (
+                "【执行器错误】未找到可执行入口文件。\n"
+                f"已检查路径（基于 {experiment_dir}）：\n"
+                "  - run.sh（根目录）\n"
+                "  - train.py（根目录）\n"
+                "  - main.py（根目录）\n"
+                "  - setting/run.sh\n"
+                "  - setting/main.py\n\n"
+                "请 Sub Agent 检查实验目录结构（如 find . -name '*.py' -maxdepth 3），\n"
+                "并在实验根目录生成正确的 run.sh 以启动训练。"
+            )
+            logger.error("No entry point in %s — writing diagnostic to error.log", experiment_dir)
+            error_log_path.parent.mkdir(parents=True, exist_ok=True)
+            error_log_path.write_text(error_msg, encoding="utf-8")
+            run_log_path.write_text("", encoding="utf-8")
+            return ExecutionResult(
+                returncode=1,
+                stdout="",
+                stderr=error_msg,
+                duration_seconds=0.0,
+                run_log_path=str(run_log_path.resolve()),
+                error_log_path=str(error_log_path.resolve()),
+                was_killed=False,
             )
 
         start = time.monotonic()

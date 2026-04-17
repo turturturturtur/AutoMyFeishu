@@ -591,6 +591,9 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
         # Extract and append file attachment text
         file_text = await _extract_file_contents(event, svc)
         if file_text:
+            _FILE_TEXT_MAX = 8000
+            if len(file_text) > _FILE_TEXT_MAX:
+                file_text = file_text[:_FILE_TEXT_MAX] + f"\n\n[…文件内容过长，已截断至 {_FILE_TEXT_MAX} 字符]"
             user_text = user_text + file_text
 
         exp_base_dir = _user_exp_dir(svc, open_id)
@@ -724,7 +727,9 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                             reply_message_id=event.message_id,
                         )
                     else:
-                        (r_exp_dir / "setting" / "review.md").write_text(review_report, encoding="utf-8")
+                        review_path = r_exp_dir / "review.md"
+                        review_path.parent.mkdir(parents=True, exist_ok=True)
+                        review_path.write_text(review_report, encoding="utf-8")
                         await svc.messaging.send_markdown(
                             chat_id,
                             f"**🕵️ {r_tid} 审阅报告**\n\n{review_report}",
@@ -1093,7 +1098,7 @@ async def _handle_enter_session(
     svc.user_sessions[open_id] = task_id
     await svc.messaging.send_text(
         chat_id,
-        f"已进入实验 **{task_id}** 的对话模式。\n"
+        f"已进入实验 expID:{task_id} 的对话模式。\n"
         "你可以直接提问（如'当前 loss 多少？'），Sub Agent 会读取实时日志回答。\n"
         "发送 `/exit` 退出当前实验会话。",
     )

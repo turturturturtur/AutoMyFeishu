@@ -548,6 +548,14 @@ async def handle_save_script(inputs: dict, experiment_dir: Path) -> str:
     if "/" in filename or "\\" in filename:
         # Repo-style path: write relative to experiment root
         script_path = experiment_dir / filename
+        # Guard against path traversal (e.g. filename = "../../etc/passwd")
+        try:
+            resolved = script_path.resolve()
+            if not resolved.is_relative_to(experiment_dir.resolve()):
+                logger.warning("save_script: path traversal blocked: %r", filename)
+                return f"❌ 路径越权：{filename} 超出实验目录范围，操作被拒绝。"
+        except Exception:
+            return f"❌ 无效路径：{filename}"
         script_path.parent.mkdir(parents=True, exist_ok=True)
     else:
         # Legacy simple filename: write under setting/

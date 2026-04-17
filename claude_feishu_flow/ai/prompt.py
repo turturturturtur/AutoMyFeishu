@@ -94,6 +94,7 @@ def build_review_agent_prompt(user_exp_dir: Optional[Path] = None) -> str:
 4. 分布式训练配置是否完整、正确（如有 DDP/FSDP/DeepSpeed）
 5. 逻辑漏洞（如数据集路径硬编码、指标计算错误、训练循环逻辑缺陷）
 6. 效率问题（如不必要的 CPU-GPU 数据搬运、冗余计算）
+7. **大仓库入口检查**：对于基于已有仓库的实验，检查实验根目录是否存在正确的 run.sh。若发现实验根目录仅有通用的 main.py，但仓库真实入口在其他路径（如 src/train.py、tools/run.py 等），应在实验根目录生成正确的 run.sh（包含 cd、环境变量设置、正确启动命令），并指出原 main.py 入口不当的问题。
 
 **修复规则**
 如果发现可确定的错误，直接调用 save_script 工具修复 main.py（filename 固定为 "main.py"）。仅修复明确的错误，不要过度重构或引入新功能。
@@ -143,6 +144,16 @@ def build_system_prompt(user_exp_dir: Optional[Path] = None) -> str:
 - 可以先用 execute_bash_command 运行极少量数据（如 --max_steps 2 或 --epochs 1）进行 Smoke Test，确认无报错。
 - Smoke Test 通过后，调用 sync_back_repo 将代码改动合入 Storage 主仓库，然后再调用 restart_experiment 挂起正式的长时间训练。
 - 无需生成 plan.md，但可根据用户需求选择性写一份简短的修改说明。
+
+**【大仓库启动规则（强制）】**
+绝对不要生搬硬套地写一个单文件 main.py 来"包裹"仓库！
+- 首先用 execute_bash_command 探索仓库结构（如 `find . -name "*.py" -maxdepth 3` 或 `ls -R`），找到真实的训练入口文件（如 `src/train.py`、`tools/run_exp.py`、`scripts/train.sh` 等）。
+- 然后在**实验根目录**生成一个 `run.sh` 脚本，在其中写明：
+  - 如何进入正确的子目录（`cd src/`）
+  - 如何设置必要的环境变量（`export PYTHONPATH=...`）
+  - 如何启动正确的训练入口（`python train.py --config ...` 或 `torchrun --nproc_per_node=... train.py ...`）
+- 底层执行器会**无脑执行你的 run.sh**，它不需要知道仓库内部结构。
+- 例外：仅当仓库本身已有 `run.sh`/`train.py`/`main.py` 位于根目录时，才无需额外生成。
 
 **情形二：全新空白实验**
 
@@ -322,10 +333,14 @@ def build_sub_agent_system_prompt(task_id: str, exp_dir_str: str, user_exp_dir: 
 当实验目录基于已有仓库时，请遵循以下流程：
 1. 理解用户需求，定位需要修改的源文件。
 2. 用 save_script 将修改写入对应路径。
-3. 用 execute_bash_command 运行极少量数据进行 Smoke Test（如 python train.py --max_steps 2）。
-4. Smoke Test 通过后：调用 **sync_back_repo** 将改动写回 Storage 主仓库。
-5. 然后调用 **restart_experiment** 将正式训练挂起到后台。
-6. 绝不跳过 sync_back_repo 步骤，否则沙盒内的修改会在实验结束后丢失。
+3. **检查实验根目录是否有 run.sh**。若没有，且仓库真实入口不在根目录（如入口为 src/train.py、tools/run_exp.py 等），必须先用 save_script 在实验根目录生成一个正确的 run.sh，内容包含：
+   - 进入正确子目录（cd src/）
+   - 设置必要环境变量（export PYTHONPATH=...）
+   - 启动真实训练入口（python train.py ... 或 torchrun --nproc_per_node=... train.py ...）
+4. 用 execute_bash_command 运行极少量数据进行 Smoke Test（如 `bash run.sh` 加 `--max_steps 2` 参数，或直接运行 `python src/train.py --max_steps 2`）。
+5. Smoke Test 通过后：调用 **sync_back_repo** 将改动写回 Storage 主仓库。
+6. 然后调用 **restart_experiment** 将正式训练挂起到后台。
+7. 绝不跳过 sync_back_repo 步骤，否则沙盒内的修改会在实验结束后丢失。
 
 ## 【Autonomous 效率规范】
 - 合并 Bash 命令：配置环境时，尽量使用 && 将多条命令合并为一步执行（例如：python -m venv venv && source venv/bin/activate && pip install torch），减少轮次消耗。
