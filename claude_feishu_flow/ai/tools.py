@@ -505,6 +505,18 @@ def convert_to_openai_tools(anthropic_tools: list[dict]) -> list[dict]:
 # Experiment alias helper
 # ---------------------------------------------------------------------------
 
+def _meta_path(exp_dir: Path) -> Path:
+    """Return the canonical meta.json path for an experiment.
+
+    Prefers the legacy ``setting/meta.json`` when it already exists (backward
+    compatibility), otherwise returns ``exp_dir/meta.json`` (new layout).
+    """
+    legacy = exp_dir / "setting" / "meta.json"
+    if legacy.exists():
+        return legacy
+    return exp_dir / "meta.json"
+
+
 def get_experiment_alias(exp_dir: Path) -> str:
     """Return the human-readable alias for an experiment, falling back to the directory name.
 
@@ -518,15 +530,15 @@ def get_experiment_alias(exp_dir: Path) -> str:
         The alias string, or exp_dir.name as fallback.
     """
     import json as _json
-    for meta_path in (exp_dir / "meta.json", exp_dir / "setting" / "meta.json"):
-        try:
-            if meta_path.exists():
-                data = _json.loads(meta_path.read_text(encoding="utf-8"))
-                alias = data.get("alias", "")
-                if alias and alias.strip():
-                    return alias.strip()
-        except Exception:
-            pass
+    try:
+        mp = _meta_path(exp_dir)
+        if mp.exists():
+            data = _json.loads(mp.read_text(encoding="utf-8"))
+            alias = data.get("alias", "")
+            if alias and alias.strip():
+                return alias.strip()
+    except Exception:
+        pass
     return exp_dir.name
 
 
@@ -780,10 +792,11 @@ async def handle_list_experiments(exp_base_dir: Path) -> str:
 
 
 async def handle_rename_experiment(inputs: dict, exp_base_dir: Path) -> str:
-    """Update the alias in setting/meta.json for the given experiment.
+    """Update the alias in meta.json for the given experiment.
 
-    Creates meta.json if it does not exist. Merges with existing data to avoid
-    overwriting other keys.
+    Uses _meta_path() to locate the correct meta.json (legacy setting/ or new
+    root layout). Creates meta.json if it does not exist. Merges with existing
+    data to avoid overwriting other keys.
 
     Args:
         inputs:       Tool input dict with keys "task_id" and "new_alias".
@@ -798,7 +811,7 @@ async def handle_rename_experiment(inputs: dict, exp_base_dir: Path) -> str:
     exp_dir = exp_base_dir / task_id
     if not exp_dir.is_dir():
         return f"实验目录不存在: {task_id}"
-    meta_path = exp_dir / "setting" / "meta.json"
+    meta_path = _meta_path(exp_dir)
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     data: dict = {}
     try:
