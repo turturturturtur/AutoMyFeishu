@@ -439,195 +439,207 @@ class KimiClient:
 
             msg = response.choices[0].message
             finish_reason = response.choices[0].finish_reason
+
+            # Checkpoint before touching history so we can roll back if an
+            # exception escapes mid-round (otherwise the next request will
+            # 400 on orphaned tool_call_ids).
+            checkpoint = len(history)
             history.append(msg.model_dump(exclude_unset=True))
 
-            if not msg.tool_calls:
-                content = msg.content
-                text = content if content else "(未返回有效回复)"
-                # msg already appended to history above; just return
-                return MainAgentResult(text=text, plot_path=_plot_path)
+            try:
+                if not msg.tool_calls:
+                    content = msg.content
+                    text = content if content else "(未返回有效回复)"
+                    # msg already appended to history above; just return
+                    return MainAgentResult(text=text, plot_path=_plot_path)
 
-            reply_text: str = msg.content or ""
+                reply_text: str = msg.content or ""
 
-            # Truncated mid-tool-call: feed error and retry
-            if finish_reason == "length" and msg.tool_calls:
+                # Truncated mid-tool-call: feed error and retry
+                if finish_reason == "length" and msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        history.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": (
+                                "Error: response truncated before tool input complete. "
+                                "Please retry with shorter content."
+                            ),
+                        })
+                    continue
+
+                action_result: MainAgentResult | None = None
+
                 for tc in msg.tool_calls:
-                    history.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": (
-                            "Error: response truncated before tool input complete. "
-                            "Please retry with shorter content."
-                        ),
-                    })
-                continue
-
-            action_result: MainAgentResult | None = None
-
-            for tc in msg.tool_calls:
-                try:
-                    tool_input = json.loads(tc.function.arguments)
-                except Exception:
-                    tool_input = {}
-
-                tool_name = tc.function.name
-
-                if progress_callback is not None:
                     try:
-                        await progress_callback(f"正在执行: {tool_name}...")
+                        tool_input = json.loads(tc.function.arguments)
                     except Exception:
-                        pass
+                        tool_input = {}
 
-                if tool_name == "launch_experiment":
-                    action_result = MainAgentResult(
-                        text=reply_text or "好的，正在为你启动实验...",
-                        action_type="launch",
-                        action_instruction=tool_input.get("instruction", ""),
-                        action_alias=tool_input.get("alias") or None,
-                    )
-                    history.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": "launch_experiment 已触发，系统将接管后续流程。",
-                    })
+                    tool_name = tc.function.name
 
-                elif tool_name == "edit_experiment":
-                    action_result = MainAgentResult(
-                        text=reply_text or "好的，正在为你进入编辑流程...",
-                        action_type="edit",
-                        action_task_id=tool_input.get("task_id", ""),
-                        action_instruction=tool_input.get("instruction", ""),
-                    )
-                    history.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": "edit_experiment 已触发，系统将接管后续流程。",
-                    })
+                    if progress_callback is not None:
+                        try:
+                            await progress_callback(f"正在执行: {tool_name}...")
+                        except Exception:
+                            pass
 
-                elif tool_name == "review_experiment":
-                    action_result = MainAgentResult(
-                        text=reply_text or "好的，正在为你启动代码审阅...",
-                        action_type="review",
-                        action_task_id=tool_input.get("task_id", ""),
-                    )
-                    history.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": "review_experiment 已触发，系统将接管审阅流程。",
-                    })
-
-                elif tool_name == "create_cron_job":
-                    action_result = MainAgentResult(
-                        text=reply_text or f"好的，正在为你注册定时任务：{tool_input.get('task_description', '')}",
-                        action_type="create_cron_job",
-                        action_instruction=json.dumps({
-                            "cron_expression": tool_input.get("cron_expression", ""),
-                            "task_description": tool_input.get("task_description", ""),
-                        }),
-                    )
-                    history.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": "create_cron_job 已触发，系统将注册定时任务。",
-                    })
-
-                elif tool_name == "write_document":
-                    action_result = MainAgentResult(
-                        text=reply_text or "好的，正在为你撰写文稿，请稍候...",
-                        action_type="write",
-                        action_instruction=tool_input.get("instruction", user_text),
-                        action_task_id=tool_input.get("related_task_id"),
-                    )
-                    history.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": "write_document 已触发，系统将接管文稿生成流程。",
-                    })
-
-                elif tool_name == "rename_experiment":
-                    try:
-                        result_text = await handle_rename_experiment(tool_input, exp_base_dir)
-                    except Exception as exc:
-                        result_text = f"工具执行失败：{exc}"
-                    history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
-
-                elif tool_name == "execute_bash_command":
-                    try:
-                        result_text = await handle_execute_bash(tool_input, Path("."))
-                    except Exception as exc:
-                        result_text = f"工具执行失败：{exc}"
-                    history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
-
-                elif tool_name == "list_experiments":
-                    try:
-                        result_text = await handle_list_experiments(exp_base_dir)
-                    except Exception as exc:
-                        result_text = f"工具执行失败：{exc}"
-                    history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
-
-                elif tool_name == "plot_experiment_metrics":
-                    try:
-                        result_str = await handle_plot_metrics(tool_input, exp_base_dir)
-                    except Exception as exc:
-                        result_str = f"绘图工具执行失败：{exc}"
-                    if result_str.startswith("PLOT_READY:"):
-                        _plot_path = result_str.split(":", 1)[1]
-                        tool_result_text = "图表已成功生成并保存到 results/plot.png，将自动发送给用户。"
-                    else:
-                        tool_result_text = result_str
-                    history.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result_text})
-
-                elif tool_name == "list_cron_jobs":
-                    if scheduler is not None:
-                        result_text = scheduler.list_jobs()
-                    else:
-                        result_text = "定时任务功能未启用（scheduler 未初始化）。"
-                    history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
-
-                elif tool_name == "cancel_cron_job":
-                    if scheduler is not None:
-                        result_text = scheduler.cancel_job(tool_input.get("job_id", ""))
-                    else:
-                        result_text = "定时任务功能未启用（scheduler 未初始化）。"
-                    history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
-
-                elif tool_name == "write_bitable":
-                    if svc is None or not open_id:
-                        result_text = "❌ 写入失败：write_bitable 工具未获得必要的上下文（svc 或 open_id 缺失）。"
-                    else:
-                        from .tools import handle_write_bitable
-                        result_text = await handle_write_bitable(
-                            svc=svc,
-                            open_id=open_id,
-                            table_name=tool_input.get("table_name", "Test_Table"),
-                            test_message=tool_input.get("test_message", ""),
+                    if tool_name == "launch_experiment":
+                        action_result = MainAgentResult(
+                            text=reply_text or "好的，正在为你启动实验...",
+                            action_type="launch",
+                            action_instruction=tool_input.get("instruction", ""),
+                            action_alias=tool_input.get("alias") or None,
                         )
-                    history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+                        history.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": "launch_experiment 已触发，系统将接管后续流程。",
+                        })
 
-                elif tool_name == "import_local_repo":
-                    if not open_id or svc is None:
-                        result_text = "❌ 导入失败：缺少用户身份信息（open_id 或 svc 缺失）。"
-                    else:
-                        from .tools import handle_import_local_repo
-                        result_text = await handle_import_local_repo(
-                            source_path=tool_input.get("source_path", ""),
-                            target_name=tool_input.get("target_name", ""),
-                            storage_base_dir=svc.config.resolved_storage_dir(),
-                            open_id=open_id,
+                    elif tool_name == "edit_experiment":
+                        action_result = MainAgentResult(
+                            text=reply_text or "好的，正在为你进入编辑流程...",
+                            action_type="edit",
+                            action_task_id=tool_input.get("task_id", ""),
+                            action_instruction=tool_input.get("instruction", ""),
                         )
-                    history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+                        history.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": "edit_experiment 已触发，系统将接管后续流程。",
+                        })
 
-                else:
-                    history.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": f"Unknown tool: {tool_name}",
-                    })
+                    elif tool_name == "review_experiment":
+                        action_result = MainAgentResult(
+                            text=reply_text or "好的，正在为你启动代码审阅...",
+                            action_type="review",
+                            action_task_id=tool_input.get("task_id", ""),
+                        )
+                        history.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": "review_experiment 已触发，系统将接管审阅流程。",
+                        })
 
-            # Blocking tool found — tool result already in history; exit
-            if action_result is not None:
-                return action_result
-            # Inline tools — continue loop
+                    elif tool_name == "create_cron_job":
+                        action_result = MainAgentResult(
+                            text=reply_text or f"好的，正在为你注册定时任务：{tool_input.get('task_description', '')}",
+                            action_type="create_cron_job",
+                            action_instruction=json.dumps({
+                                "cron_expression": tool_input.get("cron_expression", ""),
+                                "task_description": tool_input.get("task_description", ""),
+                            }),
+                        )
+                        history.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": "create_cron_job 已触发，系统将注册定时任务。",
+                        })
+
+                    elif tool_name == "write_document":
+                        action_result = MainAgentResult(
+                            text=reply_text or "好的，正在为你撰写文稿，请稍候...",
+                            action_type="write",
+                            action_instruction=tool_input.get("instruction", user_text),
+                            action_task_id=tool_input.get("related_task_id"),
+                        )
+                        history.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": "write_document 已触发，系统将接管文稿生成流程。",
+                        })
+
+                    elif tool_name == "rename_experiment":
+                        try:
+                            result_text = await handle_rename_experiment(tool_input, exp_base_dir)
+                        except Exception as exc:
+                            result_text = f"工具执行失败：{exc}"
+                        history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+
+                    elif tool_name == "execute_bash_command":
+                        try:
+                            result_text = await handle_execute_bash(tool_input, Path("."))
+                        except Exception as exc:
+                            result_text = f"工具执行失败：{exc}"
+                        history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+
+                    elif tool_name == "list_experiments":
+                        try:
+                            result_text = await handle_list_experiments(exp_base_dir)
+                        except Exception as exc:
+                            result_text = f"工具执行失败：{exc}"
+                        history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+
+                    elif tool_name == "plot_experiment_metrics":
+                        try:
+                            result_str = await handle_plot_metrics(tool_input, exp_base_dir)
+                        except Exception as exc:
+                            result_str = f"绘图工具执行失败：{exc}"
+                        if result_str.startswith("PLOT_READY:"):
+                            _plot_path = result_str.split(":", 1)[1]
+                            tool_result_text = "图表已成功生成并保存到 results/plot.png，将自动发送给用户。"
+                        else:
+                            tool_result_text = result_str
+                        history.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result_text})
+
+                    elif tool_name == "list_cron_jobs":
+                        if scheduler is not None:
+                            result_text = scheduler.list_jobs()
+                        else:
+                            result_text = "定时任务功能未启用（scheduler 未初始化）。"
+                        history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+
+                    elif tool_name == "cancel_cron_job":
+                        if scheduler is not None:
+                            result_text = scheduler.cancel_job(tool_input.get("job_id", ""))
+                        else:
+                            result_text = "定时任务功能未启用（scheduler 未初始化）。"
+                        history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+
+                    elif tool_name == "write_bitable":
+                        if svc is None or not open_id:
+                            result_text = "❌ 写入失败：write_bitable 工具未获得必要的上下文（svc 或 open_id 缺失）。"
+                        else:
+                            from .tools import handle_write_bitable
+                            result_text = await handle_write_bitable(
+                                svc=svc,
+                                open_id=open_id,
+                                table_name=tool_input.get("table_name", "Test_Table"),
+                                test_message=tool_input.get("test_message", ""),
+                            )
+                        history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+
+                    elif tool_name == "import_local_repo":
+                        if not open_id or svc is None:
+                            result_text = "❌ 导入失败：缺少用户身份信息（open_id 或 svc 缺失）。"
+                        else:
+                            from .tools import handle_import_local_repo
+                            result_text = await handle_import_local_repo(
+                                source_path=tool_input.get("source_path", ""),
+                                target_name=tool_input.get("target_name", ""),
+                                storage_base_dir=svc.config.resolved_storage_dir(),
+                                open_id=open_id,
+                            )
+                        history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+
+                    else:
+                        history.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": f"Unknown tool: {tool_name}",
+                        })
+
+                # Blocking tool found — tool result already in history; exit
+                if action_result is not None:
+                    return action_result
+                # Inline tools — continue loop
+
+            except BaseException:
+                # Roll back any partial history from this round so the next
+                # request doesn't 400 on orphaned tool_call_ids.
+                del history[checkpoint:]
+                raise
 
         # Fallback after max rounds — response msg already in history
         if response is not None:
@@ -1006,81 +1018,87 @@ class KimiClient:
             msg = response.choices[0].message
             finish_reason = response.choices[0].finish_reason
 
+            checkpoint = len(history)
             history.append(msg.model_dump(exclude_unset=True))
 
-            tool_calls = msg.tool_calls or []
+            try:
+                tool_calls = msg.tool_calls or []
 
-            # Truncated mid-tool-call: return error for each block so Kimi retries
-            if finish_reason == "length" and tool_calls:
-                for tc in tool_calls:
-                    history.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": (
-                            "Error: response was truncated before tool input was complete "
-                            "(length limit reached). Please retry this tool call with "
-                            "a shorter/chunked file content."
-                        ),
-                    })
-                logger.warning(
-                    "Sub agent round %d truncated mid-tool-use for task=%s (%d blocks affected)",
-                    round_num, task_id, len(tool_calls),
-                )
-                continue
+                # Truncated mid-tool-call: return error for each block so Kimi retries
+                if finish_reason == "length" and tool_calls:
+                    for tc in tool_calls:
+                        history.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": (
+                                "Error: response was truncated before tool input was complete "
+                                "(length limit reached). Please retry this tool call with "
+                                "a shorter/chunked file content."
+                            ),
+                        })
+                    logger.warning(
+                        "Sub agent round %d truncated mid-tool-use for task=%s (%d blocks affected)",
+                        round_num, task_id, len(tool_calls),
+                    )
+                    continue
 
-            if tool_calls:
-                for tc in tool_calls:
-                    try:
-                        tool_input = json.loads(tc.function.arguments)
-                        if progress_callback is not None:
-                            try:
-                                await progress_callback(f"正在执行: {tc.function.name}...")
-                            except Exception:
-                                pass
-                        if tc.function.name == "submit_background_job":
-                            needs_restart = True
-                            restart_custom_command = tool_input.get("custom_command")
-                            result_text = "重启信号已接收，请向用户回复确认消息。系统将在你回复后执行真正的重启。"
-                        elif tc.function.name == "send_local_image":
-                            if send_image_callback is None:
-                                result_text = "图片发送功能不可用（未注入回调）。"
+                if tool_calls:
+                    for tc in tool_calls:
+                        try:
+                            tool_input = json.loads(tc.function.arguments)
+                            if progress_callback is not None:
+                                try:
+                                    await progress_callback(f"正在执行: {tc.function.name}...")
+                                except Exception:
+                                    pass
+                            if tc.function.name == "submit_background_job":
+                                needs_restart = True
+                                restart_custom_command = tool_input.get("custom_command")
+                                result_text = "重启信号已接收，请向用户回复确认消息。系统将在你回复后执行真正的重启。"
+                            elif tc.function.name == "send_local_image":
+                                if send_image_callback is None:
+                                    result_text = "图片发送功能不可用（未注入回调）。"
+                                else:
+                                    raw_path = tool_input.get("image_path", "")
+                                    p = Path(raw_path)
+                                    if not p.is_absolute():
+                                        p = exp_dir / p
+                                    result_text = await send_image_callback(p)
+                            elif tc.function.name == "sync_back_repo":
+                                if storage_dir is None or not open_id:
+                                    result_text = "❌ sync_back_repo 不可用：未提供 storage_dir 或 open_id。"
+                                else:
+                                    from .tools import handle_sync_back
+                                    result_text = await handle_sync_back(
+                                        tool_input,
+                                        exp_base_dir=exp_dir.parent,
+                                        storage_dir=storage_dir,
+                                        open_id=open_id,
+                                    )
                             else:
-                                raw_path = tool_input.get("image_path", "")
-                                p = Path(raw_path)
-                                if not p.is_absolute():
-                                    p = exp_dir / p
-                                result_text = await send_image_callback(p)
-                        elif tc.function.name == "sync_back_repo":
-                            if storage_dir is None or not open_id:
-                                result_text = "❌ sync_back_repo 不可用：未提供 storage_dir 或 open_id。"
-                            else:
-                                from .tools import handle_sync_back
-                                result_text = await handle_sync_back(
-                                    tool_input,
-                                    exp_base_dir=exp_dir.parent,
-                                    storage_dir=storage_dir,
-                                    open_id=open_id,
-                                )
-                        else:
-                            result_text = await _dispatch_tool(tc.function.name, tool_input, exp_dir)
-                    except Exception as tool_exc:
-                        logger.warning(
-                            "Sub agent tool %r failed for task=%s: %s (input keys: %s)",
-                            tc.function.name, task_id, tool_exc,
-                            list(json.loads(tc.function.arguments).keys()) if tc.function.arguments else "empty",
-                        )
-                        result_text = (
-                            f"Tool execution failed: {tool_exc}. "
-                            "Please retry with all required fields."
-                        )
-                    history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+                                result_text = await _dispatch_tool(tc.function.name, tool_input, exp_dir)
+                        except Exception as tool_exc:
+                            logger.warning(
+                                "Sub agent tool %r failed for task=%s: %s (input keys: %s)",
+                                tc.function.name, task_id, tool_exc,
+                                list(json.loads(tc.function.arguments).keys()) if tc.function.arguments else "empty",
+                            )
+                            result_text = (
+                                f"Tool execution failed: {tool_exc}. "
+                                "Please retry with all required fields."
+                            )
+                        history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
 
-                if finish_reason == "stop":
-                    break
-                continue
+                    if finish_reason == "stop":
+                        break
+                    continue
 
-            # stop or length without tool calls — done
-            break
+                # stop or length without tool calls — done
+                break
+
+            except BaseException:
+                del history[checkpoint:]
+                raise
 
         # Extract text reply from the last response
         reply_text = ""
