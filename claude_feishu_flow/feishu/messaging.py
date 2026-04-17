@@ -118,7 +118,7 @@ class Messaging:
         try:
             await self._client.patch(
                 f"/im/v1/messages/{message_id}",
-                {"msg_type": "text", "content": content},
+                {"content": content},
             )
             logger.debug("update_message message_id=%s", message_id)
         except Exception as exc:
