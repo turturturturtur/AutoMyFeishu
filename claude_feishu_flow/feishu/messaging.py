@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """Feishu messaging: send text and card messages."""
 
 from __future__ import annotations
@@ -105,6 +107,22 @@ class Messaging:
             logger.info("撤回消息 message_id=%s 成功", message_id)
         except Exception as exc:
             logger.warning("撤回消息 %s 失败: %s", message_id, exc)
+
+    async def update_message(self, message_id: str, new_text: str) -> None:
+        """原地更新一条文本消息的内容。失败只记录 warning，不抛异常。
+
+        使用飞书 PATCH /open-apis/im/v1/messages/{message_id} 接口。
+        content 字段需为 JSON 字符串（非 dict）。
+        """
+        content = json.dumps({"text": new_text}, ensure_ascii=False)
+        try:
+            await self._client.patch(
+                f"/im/v1/messages/{message_id}",
+                {"msg_type": "text", "content": content},
+            )
+            logger.debug("update_message message_id=%s", message_id)
+        except Exception as exc:
+            logger.warning("update_message %s 失败: %s", message_id, exc)
 
     async def send_image(
         self,

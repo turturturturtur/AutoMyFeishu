@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """Claude API client — agentic tool-use loop for experiment script generation."""
 
 from __future__ import annotations
@@ -8,7 +10,7 @@ import logging
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Awaitable, Optional
 
 import anthropic
 
@@ -390,6 +392,7 @@ class ClaudeClient:
         user_exp_dir: Optional[Path] = None,
         svc: Any | None = None,
         open_id: str = "",
+        progress_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> MainAgentResult:
         """Orchestrator agent: understands natural language and triggers experiment operations.
 
@@ -473,6 +476,12 @@ class ClaudeClient:
             for block in tool_use_blocks:
                 tool_name: str = block.name
                 tool_input: dict = block.input
+
+                if progress_callback is not None:
+                    try:
+                        await progress_callback(f"正在执行: {tool_name}...")
+                    except Exception:
+                        pass
 
                 if tool_name == "launch_experiment":
                     action_result = MainAgentResult(
@@ -1034,6 +1043,7 @@ class ClaudeClient:
         send_image_callback: Optional[Callable[[Path], Coroutine[Any, Any, str]]] = None,
         storage_dir: Optional[Path] = None,
         open_id: str = "",
+        progress_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> SubAgentResult:
         """Handle a single turn of Sub Agent conversation.
 
@@ -1109,6 +1119,11 @@ class ClaudeClient:
                 tool_results = []
                 for block in tool_use_blocks:
                     try:
+                        if progress_callback is not None:
+                            try:
+                                await progress_callback(f"正在执行: {block.name}...")
+                            except Exception:
+                                pass
                         if block.name == "read_realtime_log":
                             result_text = await handle_read_log(block.input, exp_dir)
                             tool_results.append({

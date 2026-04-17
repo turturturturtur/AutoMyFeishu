@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """FastAPI webhook route and background pipeline handler."""
 
 from __future__ import annotations
@@ -602,6 +604,13 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
         loading_msg_id = await svc.messaging.send_text(
             chat_id, "⏳ 正在思考中，请稍候...", reply_message_id=event.message_id
         )
+
+        async def _main_progress(status_text: str) -> None:
+            try:
+                await svc.messaging.update_message(loading_msg_id, f"⏳ {status_text}")
+            except Exception:
+                pass
+
         try:
             result: MainAgentResult = await svc.ai.chat_main_agent(
                 user_text=user_text or "(用户发送了图片或文件)",
@@ -612,6 +621,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                 user_exp_dir=exp_base_dir,
                 svc=svc,
                 open_id=open_id,
+                progress_callback=_main_progress,
             )
             if result.text:
                 await svc.messaging.send_markdown(
@@ -1149,6 +1159,13 @@ async def _handle_sub_agent_message(
     lock = svc.sub_agent_locks[task_id]
 
     loading_msg_id = await svc.messaging.send_text(chat_id, "⏳ 正在处理中，请稍候...", reply_message_id=event_message_id)
+
+    async def _sub_progress(status_text: str) -> None:
+        try:
+            await svc.messaging.update_message(loading_msg_id, f"⏳ {status_text}")
+        except Exception:
+            pass
+
     try:
         async def _send_image_to_feishu(img_path: Path) -> str:
             try:
@@ -1170,6 +1187,7 @@ async def _handle_sub_agent_message(
                 send_image_callback=_send_image_to_feishu,
                 storage_dir=svc.config.resolved_storage_dir(),
                 open_id=open_id,
+                progress_callback=_sub_progress,
             )
         await svc.messaging.send_markdown(chat_id, result.text, reply_message_id=event_message_id)
         if result.needs_restart:

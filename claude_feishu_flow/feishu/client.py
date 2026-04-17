@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """Thin async HTTP wrapper for the Feishu Open API."""
 
 from __future__ import annotations
@@ -70,6 +72,22 @@ class FeishuClient:
             logger.warning("Feishu API non-zero code: %s", data)
         return data
 
+    async def patch(
+        self,
+        path: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """PATCH a Feishu API path, returning the parsed JSON body."""
+        url = f"{self._base_url}/{path.lstrip('/')}"
+        headers = await self._headers()
+        logger.debug("PATCH %s payload=%s", url, payload)
+        resp = await self._http.patch(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        data: dict[str, Any] = resp.json()
+        if data.get("code") not in (0, None):
+            logger.warning("Feishu API non-zero code: %s", data)
+        return data
+
     async def delete(self, path: str) -> dict[str, Any]:
         """DELETE a Feishu API path, returning the parsed JSON body."""
         url = f"{self._base_url}/{path.lstrip('/')}"
@@ -118,17 +136,21 @@ class FeishuClient:
         Returns:
             image_key string from Feishu.
         """
+        if not image_bytes:
+            raise ValueError("Image bytes are empty")
         token = await self._token_manager.get_token()
         url = f"{self._base_url}/im/v1/images"
         headers = {"Authorization": f"Bearer {token}"}
         # Must NOT include Content-Type — httpx auto-sets multipart/form-data; boundary=...
         headers.pop("Content-Type", None)
         headers.pop("content-type", None)
-        files = {"image": ("plot.png", image_bytes, "image/png")}
         data = {"image_type": "message"}
+        files = {"image": ("plot.png", image_bytes, "image/png")}
         logger.debug("POST upload_image to %s", url)
         resp = await self._http.post(url, headers=headers, data=data, files=files)
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            logger.error("Upload failed (HTTP %s): %s", resp.status_code, resp.text)
+            resp.raise_for_status()
         body: dict[str, Any] = resp.json()
         if body.get("code") not in (0, None):
             logger.warning("Feishu upload_image non-zero code: %s", body)

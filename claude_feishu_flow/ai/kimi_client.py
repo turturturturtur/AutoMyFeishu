@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """Kimi (Moonshot AI) client — OpenAI-compatible agentic tool-use loop.
 
 Implements the same public interface as ClaudeClient so either can be injected
@@ -19,7 +21,7 @@ import json
 import logging
 from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Awaitable, Optional
 
 import openai
 
@@ -377,6 +379,7 @@ class KimiClient:
         user_exp_dir: Optional[Path] = None,
         svc=None,
         open_id: str = "",
+        progress_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> MainAgentResult:
         """Orchestrator agent (Kimi): understands natural language and triggers experiment operations.
 
@@ -468,6 +471,12 @@ class KimiClient:
                     tool_input = {}
 
                 tool_name = tc.function.name
+
+                if progress_callback is not None:
+                    try:
+                        await progress_callback(f"正在执行: {tool_name}...")
+                    except Exception:
+                        pass
 
                 if tool_name == "launch_experiment":
                     action_result = MainAgentResult(
@@ -959,6 +968,7 @@ class KimiClient:
         send_image_callback: Optional[Callable[[Path], Coroutine[Any, Any, str]]] = None,
         storage_dir: Optional[Path] = None,
         open_id: str = "",
+        progress_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> SubAgentResult:
         """Handle a single turn of Sub Agent conversation.
 
@@ -1021,6 +1031,11 @@ class KimiClient:
                 for tc in tool_calls:
                     try:
                         tool_input = json.loads(tc.function.arguments)
+                        if progress_callback is not None:
+                            try:
+                                await progress_callback(f"正在执行: {tc.function.name}...")
+                            except Exception:
+                                pass
                         if tc.function.name == "restart_experiment":
                             needs_restart = True
                             result_text = "重启信号已接收，请向用户回复确认消息。系统将在你回复后执行真正的重启。"

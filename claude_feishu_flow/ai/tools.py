@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """Claude tool definitions for the experiment assistant.
 
 Generation phase tools (ALL_TOOLS):
@@ -668,18 +670,34 @@ async def handle_list_experiments(exp_base_dir: Path) -> str:
 
     if not exp_base_dir.exists():
         return "暂无实验记录（实验目录不存在）。"
-    entries = sorted(
-        (d for d in exp_base_dir.iterdir() if d.is_dir() and d.name.startswith("exp_")),
-        key=lambda d: d.stat().st_mtime,
-        reverse=True,
-    )
+
+    # Two-level scan: handle both legacy flat layout (exp_* directly) and
+    # multi-tenant layout (<open_id>/exp_*).
+    all_entries: list[Path] = []
+    for item in exp_base_dir.iterdir():
+        if not item.is_dir():
+            continue
+        if item.name.startswith("exp_"):
+            all_entries.append(item)  # legacy flat layout
+        else:
+            # Per-user layout: iterate into user subdirectory
+            try:
+                for sub in item.iterdir():
+                    if sub.is_dir() and sub.name.startswith("exp_"):
+                        all_entries.append(sub)
+            except PermissionError:
+                pass
+
+    entries = sorted(all_entries, key=lambda d: d.stat().st_mtime, reverse=True)
     if not entries:
         return "暂无实验记录。"
 
     lines: list[str] = []
     for d in entries:
         mtime = datetime.datetime.fromtimestamp(d.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-        status = "已完成" if (d / "results" / "summary.md").exists() else "未完成/运行中"
+        status = "已完成" if (
+            (d / "summary.md").exists() or (d / "results" / "summary.md").exists()
+        ) else "未完成/运行中"
 
         # Extract experiment purpose from plan.md (first 80 non-empty chars)
         purpose = ""
@@ -701,8 +719,10 @@ async def handle_list_experiments(exp_base_dir: Path) -> str:
         if purpose:
             entry += f"\n  目的: {purpose}"
 
-        # Extract live metrics from run.log (last 200 lines)
-        log_path = d / "output" / "run.log"
+        # Extract live metrics from run.log (check new root layout first, then legacy output/)
+        log_path = d / "run.log"
+        if not log_path.exists():
+            log_path = d / "output" / "run.log"
         if log_path.exists():
             try:
                 log_text = log_path.read_text(encoding="utf-8", errors="replace")
