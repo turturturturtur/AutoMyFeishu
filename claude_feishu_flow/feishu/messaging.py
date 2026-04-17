@@ -379,7 +379,7 @@ class Messaging:
                 "**🔬 进入实验专属对话（Sub Agent）**\n"
                 "点击实验卡片或 /list 列表中的 **进入会话** 按钮，\n"
                 "即可与该实验的专属 AI 助手对话。\n"
-                "Sub Agent 可读取日志、修改代码、重启实验。\n\n"
+                "Sub Agent 可读取日志、修改代码、将长时任务挂起至后台（支持自定义启动命令，如 torchrun）。\n\n"
 
                 "**🚪 退出 Sub Agent 会话**\n"
                 "```\n/exit\n```\n"
