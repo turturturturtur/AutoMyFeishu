@@ -39,6 +39,17 @@ class FeishuClient:
             "Content-Type": "application/json; charset=utf-8",
         }
 
+    async def _raise_for_status(self, resp: httpx.Response) -> None:
+        """Raise HTTPStatusError, but log the response body first."""
+        if resp.is_error:
+            logger.warning(
+                "Feishu API HTTP %s %s — body: %s",
+                resp.status_code,
+                resp.request.url,
+                resp.text,
+            )
+            resp.raise_for_status()
+
     async def post(
         self,
         path: str,
@@ -50,7 +61,7 @@ class FeishuClient:
         headers = await self._headers()
         logger.debug("POST %s payload=%s", url, payload)
         resp = await self._http.post(url, json=payload, headers=headers, params=params)
-        resp.raise_for_status()
+        await self._raise_for_status(resp)
         data: dict[str, Any] = resp.json()
         if data.get("code") not in (0, None):
             logger.warning("Feishu API non-zero code: %s", data)
@@ -66,7 +77,7 @@ class FeishuClient:
         headers = await self._headers()
         logger.debug("GET %s params=%s", url, params)
         resp = await self._http.get(url, headers=headers, params=params)
-        resp.raise_for_status()
+        await self._raise_for_status(resp)
         data: dict[str, Any] = resp.json()
         if data.get("code") not in (0, None):
             logger.warning("Feishu API non-zero code: %s", data)
@@ -82,7 +93,7 @@ class FeishuClient:
         headers = await self._headers()
         logger.debug("PUT %s payload=%s", url, payload)
         resp = await self._http.put(url, json=payload, headers=headers)
-        resp.raise_for_status()
+        await self._raise_for_status(resp)
         data: dict[str, Any] = resp.json()
         if data.get("code") not in (0, None):
             logger.warning("Feishu API non-zero code: %s", data)
@@ -98,7 +109,7 @@ class FeishuClient:
         headers = await self._headers()
         logger.debug("PATCH %s payload=%s", url, payload)
         resp = await self._http.patch(url, json=payload, headers=headers)
-        resp.raise_for_status()
+        await self._raise_for_status(resp)
         data: dict[str, Any] = resp.json()
         if data.get("code") not in (0, None):
             logger.warning("Feishu API non-zero code: %s", data)
@@ -110,7 +121,7 @@ class FeishuClient:
         headers = await self._headers()
         logger.debug("DELETE %s", url)
         resp = await self._http.delete(url, headers=headers)
-        resp.raise_for_status()
+        await self._raise_for_status(resp)
         data: dict[str, Any] = resp.json()
         if data.get("code") not in (0, None):
             logger.warning("Feishu API non-zero code: %s", data)
@@ -137,7 +148,7 @@ class FeishuClient:
         headers.pop("Content-Type", None)
         logger.debug("GET resource %s file_key=%s type=%s", url, file_key, resource_type)
         resp = await self._http.get(url, headers=headers, params={"type": resource_type})
-        resp.raise_for_status()
+        await self._raise_for_status(resp)
         return resp.content
 
     async def upload_image(self, image_bytes: bytes) -> str:
