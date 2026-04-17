@@ -178,12 +178,17 @@ class ScriptExecutor:
             )
 
         start = time.monotonic()
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(experiment_dir),
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(experiment_dir),
+            )
+        except FileNotFoundError as e:
+            raise RuntimeError(
+                f"实验目录不存在或脚本路径无效，无法启动子进程: {e}"
+            ) from e
         self.active_processes[task_id] = proc
 
         async def _drain_stream(

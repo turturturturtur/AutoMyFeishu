@@ -1223,6 +1223,13 @@ async def _restart_and_notify(
     custom_command: str | None = None,
 ) -> None:
     """Kill any running process for task_id, start a fresh one, then report."""
+    if not exp_dir.is_dir():
+        await svc.messaging.send_text(
+            chat_id,
+            f"❌ 实验目录 `{exp_dir.name}` 已不存在，无法重启。",
+            reply_message_id=reply_message_id,
+        )
+        return
     await svc.messaging.send_text(chat_id, "🚀 Sub Agent 已为您更新代码并重启实验！", reply_message_id=reply_message_id)
     try:
         result = await svc.executor.run(exp_dir, task_id, custom_command=custom_command)
