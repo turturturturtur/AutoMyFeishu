@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """System prompt for the Claude experiment assistant."""
 
 from __future__ import annotations
@@ -142,7 +144,7 @@ def build_system_prompt(user_exp_dir: Optional[Path] = None) -> str:
 - 遵守仓库原有的目录结构，不要强制创建 setting/、output/、results/ 子目录。
 - 如果用户希望你修改某个模块，直接用 save_script 将修改写到对应路径（如 src/model.py）。
 - 可以先用 execute_bash_command 运行极少量数据（如 --max_steps 2 或 --epochs 1）进行 Smoke Test，确认无报错。
-- Smoke Test 通过后，调用 sync_back_repo 将代码改动合入 Storage 主仓库，然后再调用 restart_experiment 挂起正式的长时间训练。
+- Smoke Test 通过后，调用 sync_back_repo 将代码改动合入 Storage 主仓库，然后再调用 submit_background_job 挂起正式的长时间训练（如需特殊启动命令，可通过 custom_command 参数指定，如 torchrun midtrain.py）。
 - 无需生成 plan.md，但可根据用户需求选择性写一份简短的修改说明。
 
 **【大仓库启动规则（强制）】**
@@ -178,7 +180,7 @@ def build_system_prompt(user_exp_dir: Optional[Path] = None) -> str:
 - 合并 Bash 命令：在配置环境时，请尽量使用 && 将多条命令合并为一步执行（例如：python -m venv venv && source venv/bin/activate && pip install torch），减少轮次消耗。
 - 区分调试与长时运行：
   • 快速验证代码是否报错时，使用 execute_bash_command 运行少量步骤。
-  • 确认代码无误、需要长时间训练时，必须调用 restart_experiment 将任务挂起至后台，绝对不能用 execute_bash_command 跑长时间任务！
+  • 确认代码无误、需要长时间训练时，必须调用 submit_background_job 将任务挂起至后台，绝对不能用 execute_bash_command 跑长时间任务！
 
 【飞书排版强制规则】
 1. **绝对禁止** Markdown 表格（含 | 的语法）。展示对比数据/超参数/配置时，改用：
@@ -309,11 +311,12 @@ def build_sub_agent_system_prompt(task_id: str, exp_dir_str: str, user_exp_dir: 
    - 对于基于已有仓库的实验：请将文件写入仓库对应的路径（如 src/train.py），遵守仓库原有目录结构。
    - 如果用户要求使用 torchrun、多卡训练或特殊启动参数，请生成 run.sh（内容为对应的 bash/torchrun 命令）。
 
-3. **restart_experiment** — 立即终止旧进程并用最新的代码重启实验。
+3. **submit_background_job** — 立即终止旧进程并用最新的代码在后台重启实验（非阻塞）。
    - 启动优先级：run.sh（根目录）> train.py（根目录）> main.py（根目录）> setting/run.sh > setting/main.py。
-   - 你有权限修改代码(save_script)和重启实验(restart_experiment)。
-   - 如果用户要求修改代码并运行，请先用 save_script 完成所有代码修改，然后立刻调用 restart_experiment。
-   - restart_experiment 的 task_id 参数为：{task_id}
+   - 你有权限修改代码(save_script)和重启实验(submit_background_job)。
+   - 如果用户要求修改代码并运行，请先用 save_script 完成所有代码修改，然后立刻调用 submit_background_job。
+   - submit_background_job 的 task_id 参数为：{task_id}
+   - 如果需要特殊的启动命令（如 torchrun、多卡训练），请同时传入 custom_command 参数（例如 "torchrun --nproc_per_node=4 train.py"）。
 
 4. **execute_bash_command** — 在宿主机执行 Shell 命令，获取系统级信息（进程状态、GPU、依赖包、文件系统等）。
    - 如果 read_realtime_log 发现日志为空，请务必主动使用此工具运行 `ps aux | grep python` 检查进程是否存在，或者运行 `nvidia-smi` 检查显卡状态，帮助排查系统级问题。
@@ -325,7 +328,7 @@ def build_sub_agent_system_prompt(task_id: str, exp_dir_str: str, user_exp_dir: 
 
 6. **sync_back_repo** — 将实验沙盒中的代码改动同步回 Storage 主仓库。
    - 参数：task_id（当前实验 ID）和 repo_name（仓库名称，与启动时的 base_repo 相同）。
-   - **使用时机**：完成代码修改并通过 Smoke Test 后，务必先调用此工具将改动合入主仓库，然后再调用 restart_experiment 启动正式的长时间训练。
+   - **使用时机**：完成代码修改并通过 Smoke Test 后，务必先调用此工具将改动合入主仓库，然后再调用 submit_background_job 启动正式的长时间训练。
    - 工具会自动过滤大文件（.pth/.ckpt/日志等），只同步代码和配置文件，防止占满磁盘。
 
 ## 【大仓库修改工作流（重要）】
@@ -339,14 +342,14 @@ def build_sub_agent_system_prompt(task_id: str, exp_dir_str: str, user_exp_dir: 
    - 启动真实训练入口（python train.py ... 或 torchrun --nproc_per_node=... train.py ...）
 4. 用 execute_bash_command 运行极少量数据进行 Smoke Test（如 `bash run.sh` 加 `--max_steps 2` 参数，或直接运行 `python src/train.py --max_steps 2`）。
 5. Smoke Test 通过后：调用 **sync_back_repo** 将改动写回 Storage 主仓库。
-6. 然后调用 **restart_experiment** 将正式训练挂起到后台。
+6. 然后调用 **submit_background_job** 将正式训练挂起到后台（如需 torchrun 等特殊启动命令，通过 custom_command 参数指定）。
 7. 绝不跳过 sync_back_repo 步骤，否则沙盒内的修改会在实验结束后丢失。
 
 ## 【Autonomous 效率规范】
 - 合并 Bash 命令：配置环境时，尽量使用 && 将多条命令合并为一步执行（例如：python -m venv venv && source venv/bin/activate && pip install torch），减少轮次消耗。
 - 区分调试与长时运行：
   • 快速验证代码是否报错时，使用 execute_bash_command 运行少量步骤。
-  • 确认代码无误、需要长时间训练时，必须调用 restart_experiment 将任务挂起至后台，绝对不能用 execute_bash_command 跑长时间任务！
+  • 确认代码无误、需要长时间训练时，必须调用 submit_background_job 将任务挂起至后台，绝对不能用 execute_bash_command 跑长时间任务！
 
 ## 回答原则
 - 简洁直接，优先展示关键数据

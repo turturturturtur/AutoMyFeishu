@@ -65,12 +65,15 @@ def safe_trim_history(history: list[dict], max_len: int = 40, keep_len: int = 20
 class SubAgentResult:
     """Return value from chat_with_sub_agent.
 
-    text:           Claude's reply to display to the user.
-    needs_restart:  True when Sub Agent called restart_experiment — the caller
-                    should immediately re-launch the experiment subprocess.
+    text:                   Claude's reply to display to the user.
+    needs_restart:          True when Sub Agent called submit_background_job — the caller
+                            should immediately re-launch the experiment subprocess.
+    restart_custom_command: Optional custom command string provided by the Sub Agent
+                            when calling submit_background_job with custom_command param.
     """
     text: str
     needs_restart: bool = False
+    restart_custom_command: str | None = None
 
 
 class ClaudeClient:
@@ -1074,6 +1077,7 @@ class ClaudeClient:
         system_prompt = build_sub_agent_system_prompt(task_id, str(exp_dir), user_exp_dir=user_exp_dir)
         response = None
         needs_restart = False
+        restart_custom_command: str | None = None
 
         for round_num in range(1, self._SUB_AGENT_MAX_ROUNDS + 1):
             logger.info("Sub agent round %d for task=%s", round_num, task_id)
@@ -1138,8 +1142,9 @@ class ClaudeClient:
                                 "tool_use_id": block.id,
                                 "content": result_text,
                             })
-                        elif block.name == "restart_experiment":
+                        elif block.name == "submit_background_job":
                             needs_restart = True
+                            restart_custom_command = block.input.get("custom_command")
                             tool_results.append({
                                 "type": "tool_result",
                                 "tool_use_id": block.id,
@@ -1239,4 +1244,4 @@ class ClaudeClient:
                 logger.warning("Summary call failed for task=%s: %s", task_id, exc)
 
         reply_text = "\n".join(reply_parts) if reply_parts else "(操作完成)"
-        return SubAgentResult(text=reply_text, needs_restart=needs_restart)
+        return SubAgentResult(text=reply_text, needs_restart=needs_restart, restart_custom_command=restart_custom_command)

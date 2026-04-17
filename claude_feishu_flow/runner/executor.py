@@ -1,9 +1,12 @@
+# Copyright (c) 2026 Tianle Niu
+
 """Async subprocess executor for generated experiment scripts."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import shlex
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -61,6 +64,7 @@ class ScriptExecutor:
         experiment_dir: Path,
         task_id: str,
         timeout: float | None = None,
+        custom_command: str | None = None,
     ) -> ExecutionResult:
         """Execute the experiment inside experiment_dir, streaming output to log files.
 
@@ -70,6 +74,8 @@ class ScriptExecutor:
           3. main.py           → python3 main.py
           4. setting/run.sh    → bash setting/run.sh   (legacy)
           5. setting/main.py   → python3 setting/main.py (legacy)
+
+        If custom_command is provided, it takes precedence over all file discovery.
 
         Log files:
           - New layout:    <exp_dir>/run.log, <exp_dir>/error.log
@@ -88,6 +94,9 @@ class ScriptExecutor:
             timeout:        Max wall-clock seconds to wait.
                             Defaults to self._default_timeout.
                             Pass 0 or None to use the default.
+            custom_command: Optional shell command string to execute directly (e.g.
+                            "torchrun --nproc_per_node=4 train.py"). When provided,
+                            file discovery is skipped entirely.
 
         Returns:
             ExecutionResult with returncode, stdout, stderr, duration_seconds,
@@ -119,8 +128,11 @@ class ScriptExecutor:
         run_log_path = log_dir / "run.log"
         error_log_path = log_dir / "error.log"
 
-        # --- Determine launch command (root-first, then legacy setting/) ---
-        if (experiment_dir / "run.sh").exists():
+        # --- Determine launch command (custom_command takes precedence) ---
+        if custom_command:
+            cmd = shlex.split(custom_command)
+            logger.info("Using custom_command=%r (cwd=%s)", custom_command, experiment_dir)
+        elif (experiment_dir / "run.sh").exists():
             cmd = ["bash", "run.sh"]
             logger.info("Found run.sh at root, using bash run.sh (cwd=%s)", experiment_dir)
         elif (experiment_dir / "train.py").exists():

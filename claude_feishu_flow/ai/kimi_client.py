@@ -990,6 +990,7 @@ class KimiClient:
         system_prompt = build_sub_agent_system_prompt(task_id, str(exp_dir), user_exp_dir=user_exp_dir)
         response = None
         needs_restart = False
+        restart_custom_command: str | None = None
 
         for round_num in range(1, self._SUB_AGENT_MAX_ROUNDS + 1):
             logger.info("Kimi sub agent round %d for task=%s", round_num, task_id)
@@ -1036,8 +1037,9 @@ class KimiClient:
                                 await progress_callback(f"正在执行: {tc.function.name}...")
                             except Exception:
                                 pass
-                        if tc.function.name == "restart_experiment":
+                        if tc.function.name == "submit_background_job":
                             needs_restart = True
+                            restart_custom_command = tool_input.get("custom_command")
                             result_text = "重启信号已接收，请向用户回复确认消息。系统将在你回复后执行真正的重启。"
                         elif tc.function.name == "send_local_image":
                             if send_image_callback is None:
@@ -1101,4 +1103,4 @@ class KimiClient:
             except Exception as exc:
                 logger.warning("Summary call failed for task=%s: %s", task_id, exc)
 
-        return SubAgentResult(text=reply_text or "(操作完成)", needs_restart=needs_restart)
+        return SubAgentResult(text=reply_text or "(操作完成)", needs_restart=needs_restart, restart_custom_command=restart_custom_command)

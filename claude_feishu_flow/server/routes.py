@@ -1198,6 +1198,7 @@ async def _handle_sub_agent_message(
                     exp_dir=exp_dir,
                     chat_id=chat_id,
                     reply_message_id=event_message_id,
+                    custom_command=result.restart_custom_command,
                 )
             )
     except Exception as exc:
@@ -1219,11 +1220,12 @@ async def _restart_and_notify(
     exp_dir: Path,
     chat_id: str,
     reply_message_id: str | None = None,
+    custom_command: str | None = None,
 ) -> None:
     """Kill any running process for task_id, start a fresh one, then report."""
     await svc.messaging.send_text(chat_id, "🚀 Sub Agent 已为您更新代码并重启实验！", reply_message_id=reply_message_id)
     try:
-        result = await svc.executor.run(exp_dir, task_id)
+        result = await svc.executor.run(exp_dir, task_id, custom_command=custom_command)
         if result.was_killed:
             # This run was itself superseded by yet another restart; stay silent
             return

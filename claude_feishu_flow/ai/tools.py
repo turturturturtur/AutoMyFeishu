@@ -8,7 +8,7 @@ Generation phase tools (ALL_TOOLS):
 Sub Agent tools (SUB_AGENT_TOOLS):
   read_realtime_log    — read tail of run.log (root or output/)
   save_script          — overwrite any file in the experiment directory
-  restart_experiment   — signal the orchestrator to kill old process and restart with new code
+  submit_background_job — signal the orchestrator to kill old process and restart with new code (supports custom_command)
   execute_bash_command — run shell commands inline
   send_local_image     — upload a local image file and send it to the Feishu chat
   sync_back_repo       — sync code changes back to the Storage master repo (safe whitelist filter)
@@ -89,11 +89,14 @@ READ_LOG_TOOL: dict = {
     },
 }
 
-RESTART_EXPERIMENT_TOOL: dict = {
-    "name": "restart_experiment",
+SUBMIT_BACKGROUND_JOB_TOOL: dict = {
+    "name": "submit_background_job",
     "description": (
-        "终止当前正在运行的实验进程，并用最新的代码（setting/run.sh 或 setting/main.py）重新启动。"
+        "终止当前正在运行的实验进程，并在后台重新启动一个新进程（非阻塞）。"
+        "适用于所有长耗时任务：正式训练、推理、数据处理等。"
         "请在调用 save_script 完成代码修改后，立刻调用此工具使修改生效。"
+        "如果不想使用默认的 run.sh / main.py，可通过 custom_command 指定自定义启动命令"
+        "（如 torchrun --nproc_per_node=4 train.py）。"
     ),
     "input_schema": {
         "type": "object",
@@ -101,6 +104,10 @@ RESTART_EXPERIMENT_TOOL: dict = {
             "task_id": {
                 "type": "string",
                 "description": "要重启的实验 task_id（例如 exp_xxxxxxxx）。",
+            },
+            "custom_command": {
+                "type": "string",
+                "description": "（可选）自定义启动命令，例如 'torchrun midtrain.py' 或 'bash custom_run.sh'。不传则按默认优先级嗅探 run.sh / train.py / main.py。",
             },
         },
         "required": ["task_id"],
@@ -110,8 +117,10 @@ RESTART_EXPERIMENT_TOOL: dict = {
 EXECUTE_BASH_TOOL: dict = {
     "name": "execute_bash_command",
     "description": (
-        "在宿主机执行系统终端命令并返回输出。可用于排查进程(ps aux)、检查 GPU (nvidia-smi)、"
-        "查看依赖(pip list)或检查文件是否存在(ls -la)。"
+        "⚠️ 阻塞型同步指令：仅用于极短时间的诊断（如 ls, cat, nvidia-smi, pip install）"
+        "或 1 分钟内可完成的 Smoke Test。此工具会阻塞对话，系统强制 60 秒超时熔断！"
+        "绝对禁止用此工具执行正式的训练、推理等长耗时任务！"
+        "如需后台执行长任务，请改用 submit_background_job 工具。"
         "【重要】执行 Python 或 pip 命令前，请先检查 GLOBAL_RULES.md 中是否有关于虚拟环境的规定，"
         "并根据规定激活指定虚拟环境后再执行。"
     ),
@@ -168,7 +177,7 @@ SYNC_BACK_REPO_TOOL: dict = {
     },
 }
 
-SUB_AGENT_TOOLS: list[dict] = [READ_LOG_TOOL, SAVE_SCRIPT_TOOL, RESTART_EXPERIMENT_TOOL, EXECUTE_BASH_TOOL, SEND_LOCAL_IMAGE_TOOL, SYNC_BACK_REPO_TOOL]
+SUB_AGENT_TOOLS: list[dict] = [READ_LOG_TOOL, SAVE_SCRIPT_TOOL, SUBMIT_BACKGROUND_JOB_TOOL, EXECUTE_BASH_TOOL, SEND_LOCAL_IMAGE_TOOL, SYNC_BACK_REPO_TOOL]
 
 
 # ---------------------------------------------------------------------------
@@ -621,7 +630,7 @@ async def handle_execute_bash(inputs: dict, exp_dir: Path) -> str:
     """
     command: str = inputs["command"]
     MAX_OUTPUT = 4000
-    TIMEOUT = 30
+    TIMEOUT = 60
 
     try:
         proc = await asyncio.create_subprocess_shell(
@@ -634,8 +643,12 @@ async def handle_execute_bash(inputs: dict, exp_dir: Path) -> str:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=TIMEOUT)
         except asyncio.TimeoutError:
             proc.kill()
-            await proc.communicate()
-            return f"[超时] 命令在 {TIMEOUT}s 内未完成，已强制终止: {command}"
+            await proc.wait()
+            return (
+                f"❌ 错误：命令执行超时被系统强杀！"
+                f"你违规使用了短任务工具执行长任务（命令: {command}）。"
+                f"请立即改用 submit_background_job 工具提交长耗时任务！"
+            )
 
         stdout = stdout_bytes.decode("utf-8", errors="replace")
         stderr = stderr_bytes.decode("utf-8", errors="replace")
