@@ -111,7 +111,7 @@ class Messaging:
     async def update_message(self, message_id: str, new_text: str) -> None:
         """原地更新一条文本消息的内容。失败只记录 warning，不抛异常。
 
-        使用飞书 PATCH /open-apis/im/v1/messages/{message_id} 接口。
+        使用飞书 PUT /open-apis/im/v1/messages/{message_id} 接口。
         content 字段需为 JSON 字符串（非 dict）。
         """
         content = json.dumps({"text": new_text}, ensure_ascii=False)
@@ -120,7 +120,7 @@ class Messaging:
             "content": content,
         }
         try:
-            await self._client.patch(
+            await self._client.put(
                 f"/im/v1/messages/{message_id}",
                 payload,
             )

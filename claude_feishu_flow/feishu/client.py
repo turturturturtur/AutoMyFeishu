@@ -72,6 +72,22 @@ class FeishuClient:
             logger.warning("Feishu API non-zero code: %s", data)
         return data
 
+    async def put(
+        self,
+        path: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """PUT to a Feishu API path, returning the parsed JSON body."""
+        url = f"{self._base_url}/{path.lstrip('/')}"
+        headers = await self._headers()
+        logger.debug("PUT %s payload=%s", url, payload)
+        resp = await self._http.put(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        data: dict[str, Any] = resp.json()
+        if data.get("code") not in (0, None):
+            logger.warning("Feishu API non-zero code: %s", data)
+        return data
+
     async def patch(
         self,
         path: str,
