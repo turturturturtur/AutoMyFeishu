@@ -608,8 +608,8 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
         async def _main_progress(status_text: str) -> None:
             try:
                 await svc.messaging.update_message(loading_msg_id, f"⏳ {status_text}")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to update main progress message: %s", e)
 
         try:
             result: MainAgentResult = await svc.ai.chat_main_agent(
@@ -1163,8 +1163,8 @@ async def _handle_sub_agent_message(
     async def _sub_progress(status_text: str) -> None:
         try:
             await svc.messaging.update_message(loading_msg_id, f"⏳ {status_text}")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to update sub progress message: %s", e)
 
     try:
         async def _send_image_to_feishu(img_path: Path) -> str:

@@ -115,10 +115,14 @@ class Messaging:
         content 字段需为 JSON 字符串（非 dict）。
         """
         content = json.dumps({"text": new_text}, ensure_ascii=False)
+        payload = {
+            "msg_type": "text",
+            "content": content,
+        }
         try:
             await self._client.patch(
                 f"/im/v1/messages/{message_id}",
-                {"content": content},
+                payload,
             )
             logger.debug("update_message message_id=%s", message_id)
         except Exception as exc:
