@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """Unit tests for ai/tools.py and ai/client.py."""
 
 from __future__ import annotations
@@ -226,3 +228,87 @@ async def test_generate_experiment_tools_schema_passed(tmp_path: Path):
 
     call_kwargs = mock_create.call_args.kwargs
     assert call_kwargs["tools"] == ALL_TOOLS
+
+
+# ---------------------------------------------------------------------------
+# Sandbox boundary tests for handle_save_script
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_save_script_sandbox_blocks_traversal(tmp_path: Path):
+    """Path traversal in repo-style filename is blocked after configure_sandbox_dirs."""
+    import claude_feishu_flow.ai.tools as tools_mod
+
+    experiments_dir = tmp_path / "Experiments"
+    storage_dir = tmp_path / "Storage"
+    experiments_dir.mkdir()
+    storage_dir.mkdir()
+
+    tools_mod.configure_sandbox_dirs(experiments_dir, storage_dir)
+    try:
+        exp_dir = experiments_dir / "exp_abc"
+        exp_dir.mkdir()
+        result = await tools_mod.handle_save_script(
+            {"filename": "../../etc/passwd", "code": "malicious"},
+            experiment_dir=exp_dir,
+        )
+        # Either the inner per-experiment check or the global sandbox check fires —
+        # both produce an ❌ error. What matters is the file was NOT written.
+        assert result.startswith("❌")
+        # Ensure the file was NOT written
+        assert not (tmp_path / "etc" / "passwd").exists()
+    finally:
+        # Reset global state so other tests are not affected
+        tools_mod._SANDBOX_EXPERIMENTS_DIR = None
+        tools_mod._SANDBOX_STORAGE_DIR = None
+
+
+@pytest.mark.asyncio
+async def test_save_script_sandbox_allows_valid_path(tmp_path: Path):
+    """A legitimate path inside the experiments dir is allowed."""
+    import claude_feishu_flow.ai.tools as tools_mod
+
+    experiments_dir = tmp_path / "Experiments"
+    storage_dir = tmp_path / "Storage"
+    experiments_dir.mkdir()
+    storage_dir.mkdir()
+
+    tools_mod.configure_sandbox_dirs(experiments_dir, storage_dir)
+    try:
+        exp_dir = experiments_dir / "exp_xyz"
+        exp_dir.mkdir()
+        result = await tools_mod.handle_save_script(
+            {"filename": "src/model.py", "code": "# ok\n"},
+            experiment_dir=exp_dir,
+        )
+        # Should return an absolute path, not an error message
+        assert "安全沙盒拦截" not in result
+        assert Path(result).exists()
+    finally:
+        tools_mod._SANDBOX_EXPERIMENTS_DIR = None
+        tools_mod._SANDBOX_STORAGE_DIR = None
+
+
+@pytest.mark.asyncio
+async def test_save_script_simple_name_sandbox_blocks_traversal(tmp_path: Path):
+    """Simple filename that resolves outside sandbox (edge case) is blocked."""
+    import claude_feishu_flow.ai.tools as tools_mod
+
+    experiments_dir = tmp_path / "Experiments"
+    storage_dir = tmp_path / "Storage"
+    experiments_dir.mkdir()
+    storage_dir.mkdir()
+
+    tools_mod.configure_sandbox_dirs(experiments_dir, storage_dir)
+    try:
+        # Use an exp_dir that is outside the sandbox to simulate an edge case
+        outside_exp_dir = tmp_path / "outside" / "exp_bad"
+        outside_exp_dir.mkdir(parents=True)
+        result = await tools_mod.handle_save_script(
+            {"filename": "main.py", "code": "evil"},
+            experiment_dir=outside_exp_dir,
+        )
+        assert "安全沙盒拦截" in result
+    finally:
+        tools_mod._SANDBOX_EXPERIMENTS_DIR = None
+        tools_mod._SANDBOX_STORAGE_DIR = None

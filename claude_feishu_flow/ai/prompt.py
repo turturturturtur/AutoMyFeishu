@@ -16,7 +16,14 @@ def _get_global_rules(user_exp_dir: Optional[Path] = None) -> str:
     If user_exp_dir is provided and contains its own GLOBAL_RULES.md, that
     file is appended as user-specific constraints.
     """
-    parts: list[str] = []
+    _SANDBOX_RULE = (
+        "【绝对安全沙盒边界 (CRITICAL)】\n"
+        "你的所有读写操作（包括 save_script 和 bash 操作）必须被严格限制在当前分配给你的 "
+        "`Experiments/<open_id>/<task_id>` 目录，或者 `Storage/<open_id>/<repo_name>` 目录内。\n"
+        "绝对禁止读取、修改、删除宿主机上这两大工作区之外的任何文件或系统环境！"
+        "一旦触碰红线，你的操作将被底层安全系统拦截并判定任务失败！"
+    )
+    parts: list[str] = [f"\n\n{_SANDBOX_RULE}\n"]
     global_path = Path(os.getcwd()) / "GLOBAL_RULES.md"
     if global_path.exists():
         content = global_path.read_text(encoding="utf-8").strip()

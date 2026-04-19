@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """FastAPI application factory, lifespan, and shared services container."""
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from fastapi import FastAPI
 
 from claude_feishu_flow.ai.client import ClaudeClient
 from claude_feishu_flow.ai.kimi_client import KimiClient
+from claude_feishu_flow.ai.tools import configure_sandbox_dirs
 from claude_feishu_flow.config import Config
 from claude_feishu_flow.feishu.auth import TokenManager
 from claude_feishu_flow.feishu.bitable import BitableClient
@@ -113,6 +116,9 @@ def create_app(config: Config) -> FastAPI:
                 base_url=config.anthropic_base_url or None,
             )
         executor = ScriptExecutor()
+
+        # Lock down sandbox write boundaries before anything else can call save_script
+        configure_sandbox_dirs(config.resolved_experiments_dir(), config.resolved_storage_dir())
 
         services = Services(
             config=config,

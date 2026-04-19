@@ -38,6 +38,30 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Sandbox boundary dirs (set once at startup via configure_sandbox_dirs)
+# ---------------------------------------------------------------------------
+
+_SANDBOX_EXPERIMENTS_DIR: Path | None = None
+_SANDBOX_STORAGE_DIR: Path | None = None
+
+
+def configure_sandbox_dirs(experiments_dir: Path, storage_dir: Path) -> None:
+    """Call once at server startup to lock down allowed write paths.
+
+    After this is called, handle_save_script and handle_sync_back will reject
+    any path that falls outside the resolved experiments_dir or storage_dir.
+    """
+    global _SANDBOX_EXPERIMENTS_DIR, _SANDBOX_STORAGE_DIR
+    _SANDBOX_EXPERIMENTS_DIR = experiments_dir.resolve()
+    _SANDBOX_STORAGE_DIR = storage_dir.resolve()
+    logger.info(
+        "configure_sandbox_dirs: experiments=%s  storage=%s",
+        _SANDBOX_EXPERIMENTS_DIR,
+        _SANDBOX_STORAGE_DIR,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Tool schema (Anthropic tools API format)
 # ---------------------------------------------------------------------------
 
@@ -124,6 +148,7 @@ EXECUTE_BASH_TOOL: dict = {
         "如需后台执行长任务，请改用 submit_background_job 工具。"
         "【重要】执行 Python 或 pip 命令前，请先检查 GLOBAL_RULES.md 中是否有关于虚拟环境的规定，"
         "并根据规定激活指定虚拟环境后再执行。"
+        "【安全】执行 bash 时请时刻注意当前路径（pwd）。严禁使用 rm -rf 等危险命令操作工作区外的文件。"
     ),
     "input_schema": {
         "type": "object",
@@ -595,6 +620,22 @@ async def handle_save_script(inputs: dict, experiment_dir: Path) -> str:
                 run_sh.unlink()
                 logger.info("save_script: removed stale run.sh (main.py was overwritten)")
 
+    # ── Global sandbox boundary check ────────────────────────────────────────
+    # Defends against path traversal attacks (e.g. filename = "../../etc/passwd")
+    # even when sandbox dirs haven't been configured yet (fail-open in dev mode).
+    if _SANDBOX_EXPERIMENTS_DIR is not None or _SANDBOX_STORAGE_DIR is not None:
+        _resolved = script_path.resolve()
+        _ok = (
+            (_SANDBOX_EXPERIMENTS_DIR is not None and _resolved.is_relative_to(_SANDBOX_EXPERIMENTS_DIR))
+            or (_SANDBOX_STORAGE_DIR is not None and _resolved.is_relative_to(_SANDBOX_STORAGE_DIR))
+        )
+        if not _ok:
+            logger.warning("save_script: sandbox escape blocked: %r → %s", filename, _resolved)
+            return (
+                "❌ 安全沙盒拦截：系统严禁向 Experiments/ 和 Storage/ 目录之外的路径写入或修改文件！"
+                "请在当前实验工作区内操作。"
+            )
+
     script_path.write_text(code, encoding="utf-8")
     abs_path = str(script_path.resolve())
     logger.info("save_script: wrote %d bytes to %s", len(code), abs_path)
@@ -976,6 +1017,11 @@ async def handle_sync_back(
 
         # Copy to Storage, creating parent directories as needed
         dest_path = storage_repo_dir / rel_path
+        dest_resolved = dest_path.resolve()
+        if _SANDBOX_STORAGE_DIR is not None and not dest_resolved.is_relative_to(_SANDBOX_STORAGE_DIR):
+            logger.warning("sync_back: dest path traversal blocked: %s", dest_path)
+            skipped_count += 1
+            continue
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         _shutil.copy2(src_path, dest_path)
         synced.append(rel_str)
