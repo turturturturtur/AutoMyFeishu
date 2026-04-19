@@ -97,6 +97,34 @@ def _save_user_config(svc, open_id: str, data: dict) -> None:  # type: ignore[no
     p.write_text(_j.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def load_history(file_path: Path) -> list[dict]:
+    """Load a persisted message history from disk; return [] on miss or corrupt file."""
+    if not file_path.exists():
+        return []
+    try:
+        return json.loads(file_path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning("Failed to load history from %s, starting fresh", file_path)
+        return []
+
+
+def save_history(file_path: Path, history: list[dict]) -> None:
+    """Persist message history to disk via atomic write (write .tmp, then rename).
+
+    No-op on empty history to avoid overwriting a valid disk file with [].
+    Never raises — save failure is only logged.
+    """
+    if not history:
+        return
+    try:
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = file_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(file_path)
+    except Exception:
+        logger.warning("Failed to save history to %s", file_path, exc_info=True)
+
+
 def _clean_at_mentions(text: str, mention_keys: list[str]) -> str:
     """Strip Feishu @mention placeholder keys from message text.
 
@@ -599,8 +627,12 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
             user_text = user_text + file_text
 
         exp_base_dir = _user_exp_dir(svc, open_id)
-        # Retrieve or create persistent history for this chat
-        history = svc.main_agent_histories.setdefault(chat_id, [])
+        # Lazy-load history from disk on first encounter of this chat_id.
+        if chat_id not in svc.main_agent_histories:
+            svc.main_agent_histories[chat_id] = load_history(
+                exp_base_dir / "main_agent_history.json"
+            )
+        history = svc.main_agent_histories[chat_id]
         loading_msg_id = await svc.messaging.send_text(
             chat_id, "⏳ 正在思考中，请稍候...", reply_message_id=event.message_id
         )
@@ -623,6 +655,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
                 open_id=open_id,
                 progress_callback=_main_progress,
             )
+            save_history(exp_base_dir / "main_agent_history.json", history)
             if result.text:
                 await svc.messaging.send_markdown(
                     chat_id, result.text, reply_message_id=event.message_id
@@ -807,6 +840,7 @@ async def _handle_message(event, svc) -> None:  # type: ignore[no-untyped-def]
 
         except Exception as exc:
             logger.exception("Main agent failed: %s", exc)
+            save_history(exp_base_dir / "main_agent_history.json", history)
             await svc.messaging.send_text(
                 chat_id, f"❌ 发生错误：{exc}", reply_message_id=event.message_id
             )
@@ -1152,7 +1186,7 @@ async def _handle_sub_agent_message(
     # The lock serialises concurrent turns so history is never mutated by two
     # coroutines at the same time (Feishu can deliver rapid messages in parallel).
     if task_id not in svc.sub_agent_histories:
-        svc.sub_agent_histories[task_id] = []
+        svc.sub_agent_histories[task_id] = load_history(exp_dir / "sub_agent_history.json")
     if task_id not in svc.sub_agent_locks:
         svc.sub_agent_locks[task_id] = asyncio.Lock()
     history = svc.sub_agent_histories[task_id]
@@ -1189,6 +1223,7 @@ async def _handle_sub_agent_message(
                 open_id=open_id,
                 progress_callback=_sub_progress,
             )
+            save_history(exp_dir / "sub_agent_history.json", history)
         await svc.messaging.send_markdown(chat_id, result.text, reply_message_id=event_message_id)
         if result.needs_restart:
             asyncio.create_task(
@@ -1203,6 +1238,7 @@ async def _handle_sub_agent_message(
             )
     except Exception as exc:
         logger.exception("Sub agent error for task=%s: %s", task_id, exc)
+        save_history(exp_dir / "sub_agent_history.json", history)
         await svc.messaging.send_text(chat_id, f"Sub Agent 出错：{exc}", reply_message_id=event_message_id)
     finally:
         await svc.messaging.delete_message(loading_msg_id)

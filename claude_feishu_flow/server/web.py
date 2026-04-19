@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """Web Dashboard routes: REST API + static HTML page."""
 
 from __future__ import annotations
@@ -105,6 +107,35 @@ def _sanitize_history(history: list[dict]) -> list[dict[str, str]]:
     return result
 
 
+def _wipe_persisted_histories(svc: Services) -> None:
+    """Delete all persisted history JSON files.
+
+    Called when the AI provider is hot-switched so the new provider does not
+    receive history in an incompatible message format.
+    """
+    base_dir = svc.config.resolved_experiments_dir()
+    if not base_dir.exists():
+        return
+    for owner_dir in base_dir.iterdir():
+        if not owner_dir.is_dir():
+            continue
+        main_hist = owner_dir / "main_agent_history.json"
+        if main_hist.exists():
+            try:
+                main_hist.unlink()
+            except Exception:
+                logger.warning("Could not delete %s", main_hist)
+        for exp_dir in owner_dir.iterdir():
+            if not exp_dir.is_dir():
+                continue
+            sub_hist = exp_dir / "sub_agent_history.json"
+            if sub_hist.exists():
+                try:
+                    sub_hist.unlink()
+                except Exception:
+                    logger.warning("Could not delete %s", sub_hist)
+
+
 # ── page route ───────────────────────────────────────────────────────────────
 
 @router.get("/", include_in_schema=False)
@@ -206,17 +237,54 @@ async def get_logs(task_id: str, request: Request) -> dict[str, str]:
 
 @router.get("/api/histories")
 async def get_histories(request: Request) -> dict[str, Any]:
-    """Return sanitized Main Agent and Sub Agent conversation histories."""
-    svc = _svc(request)
+    """Return sanitized Main Agent and Sub Agent conversation histories.
 
-    main_agent: dict[str, list[dict[str, str]]] = {
-        chat_id: _sanitize_history(msgs)
-        for chat_id, msgs in svc.main_agent_histories.items()
-    }
-    sub_agent: dict[str, list[dict[str, str]]] = {
-        task_id: _sanitize_history(msgs)
-        for task_id, msgs in svc.sub_agent_histories.items()
-    }
+    Sources (priority order): in-memory (live session) > disk (persisted across restarts).
+    Scanning the filesystem ensures histories are available immediately after a restart,
+    before any user sends a new message.
+    """
+    import json as _json
+    svc = _svc(request)
+    base_dir = svc.config.resolved_experiments_dir()
+
+    # ── Main Agent: scan Experiments/<open_id>/main_agent_history.json ─────────
+    main_agent: dict[str, list[dict[str, str]]] = {}
+    if base_dir.exists():
+        for owner_dir in base_dir.iterdir():
+            if not owner_dir.is_dir():
+                continue
+            hist_file = owner_dir / "main_agent_history.json"
+            if hist_file.exists():
+                try:
+                    disk_hist = _json.loads(hist_file.read_text(encoding="utf-8"))
+                    main_agent[owner_dir.name] = _sanitize_history(disk_hist)
+                except Exception:
+                    logger.warning("Failed to read main_agent_history from %s", hist_file)
+
+    # In-memory wins for live sessions (keyed by chat_id, e.g. oc_xxx)
+    for chat_id, msgs in svc.main_agent_histories.items():
+        main_agent[chat_id] = _sanitize_history(msgs)
+
+    # ── Sub Agent: scan Experiments/<open_id>/<task_id>/sub_agent_history.json ─
+    sub_agent: dict[str, list[dict[str, str]]] = {}
+    if base_dir.exists():
+        for owner_dir in base_dir.iterdir():
+            if not owner_dir.is_dir():
+                continue
+            for exp_dir in owner_dir.iterdir():
+                if not exp_dir.is_dir() or not exp_dir.name.startswith("exp_"):
+                    continue
+                hist_file = exp_dir / "sub_agent_history.json"
+                if hist_file.exists():
+                    try:
+                        disk_hist = _json.loads(hist_file.read_text(encoding="utf-8"))
+                        sub_agent[exp_dir.name] = _sanitize_history(disk_hist)
+                    except Exception:
+                        logger.warning("Failed to read sub_agent_history from %s", hist_file)
+
+    # In-memory wins for live sub-agent sessions
+    for task_id, msgs in svc.sub_agent_histories.items():
+        sub_agent[task_id] = _sanitize_history(msgs)
 
     return {"main_agent": main_agent, "sub_agent": sub_agent}
 
@@ -328,6 +396,9 @@ def _reload_ai_client(svc: Services) -> None:
     # identity leakage (Claude history being fed to Kimi or vice-versa).
     svc.main_agent_histories.clear()
     svc.sub_agent_histories.clear()
+    # Also wipe disk history files: the new provider uses a different message
+    # format and cannot consume histories written by the old provider.
+    _wipe_persisted_histories(svc)
     logger.info(
         "AI client hot-reloaded: provider=%s model=%s — conversation histories cleared",
         cfg.llm_provider,
