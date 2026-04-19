@@ -658,6 +658,24 @@ class ClaudeClient:
                         "content": result_text,
                     })
 
+                elif tool_name == "update_memory":
+                    from .tools import handle_update_memory
+                    try:
+                        result_text = await handle_update_memory(
+                            level=block.input.get("level", ""),
+                            content=block.input.get("content", ""),
+                            open_id=open_id,
+                            exp_dir=None,
+                            user_exp_dir=user_exp_dir,
+                        )
+                    except Exception as exc:
+                        result_text = f"工具执行失败：{exc}"
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_text,
+                    })
+
                 else:
                     tool_results.append({
                         "type": "tool_result",
@@ -1074,7 +1092,7 @@ class ClaudeClient:
 
         history.append({"role": "user", "content": user_text})
 
-        system_prompt = build_sub_agent_system_prompt(task_id, str(exp_dir), user_exp_dir=user_exp_dir)
+        system_prompt = build_sub_agent_system_prompt(task_id, str(exp_dir), user_exp_dir=user_exp_dir, exp_dir=exp_dir)
         response = None
         needs_restart = False
         restart_custom_command: str | None = None
@@ -1181,6 +1199,20 @@ class ClaudeClient:
                                     storage_dir=storage_dir,
                                     open_id=open_id,
                                 )
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": result_text,
+                            })
+                        elif block.name == "update_memory":
+                            from .tools import handle_update_memory
+                            result_text = await handle_update_memory(
+                                level=block.input.get("level", ""),
+                                content=block.input.get("content", ""),
+                                open_id=open_id,
+                                exp_dir=exp_dir,
+                                user_exp_dir=user_exp_dir,
+                            )
                             tool_results.append({
                                 "type": "tool_result",
                                 "tool_use_id": block.id,

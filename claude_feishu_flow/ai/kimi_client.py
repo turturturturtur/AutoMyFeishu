@@ -623,6 +623,20 @@ class KimiClient:
                             )
                         history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
 
+                    elif tool_name == "update_memory":
+                        from .tools import handle_update_memory
+                        try:
+                            result_text = await handle_update_memory(
+                                level=tool_input.get("level", ""),
+                                content=tool_input.get("content", ""),
+                                open_id=open_id,
+                                exp_dir=None,
+                                user_exp_dir=user_exp_dir,
+                            )
+                        except Exception as exc:
+                            result_text = f"工具执行失败：{exc}"
+                        history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
+
                     else:
                         history.append({
                             "role": "tool",
@@ -999,7 +1013,7 @@ class KimiClient:
 
         history.append({"role": "user", "content": user_text})
 
-        system_prompt = build_sub_agent_system_prompt(task_id, str(exp_dir), user_exp_dir=user_exp_dir)
+        system_prompt = build_sub_agent_system_prompt(task_id, str(exp_dir), user_exp_dir=user_exp_dir, exp_dir=exp_dir)
         response = None
         needs_restart = False
         restart_custom_command: str | None = None
@@ -1075,6 +1089,15 @@ class KimiClient:
                                         storage_dir=storage_dir,
                                         open_id=open_id,
                                     )
+                            elif tc.function.name == "update_memory":
+                                from .tools import handle_update_memory
+                                result_text = await handle_update_memory(
+                                    level=tool_input.get("level", ""),
+                                    content=tool_input.get("content", ""),
+                                    open_id=open_id,
+                                    exp_dir=exp_dir,
+                                    user_exp_dir=user_exp_dir,
+                                )
                             else:
                                 result_text = await _dispatch_tool(tc.function.name, tool_input, exp_dir)
                         except Exception as tool_exc:

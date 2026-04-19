@@ -36,6 +36,33 @@ def _get_global_rules(user_exp_dir: Optional[Path] = None) -> str:
     return "".join(parts)
 
 
+def _get_memory_context(
+    user_exp_dir: Optional[Path] = None,
+    exp_dir: Optional[Path] = None,
+) -> str:
+    """Read USER_MEMORY.md and/or MEMORY.md and return a formatted context block."""
+    parts: list[str] = []
+    if user_exp_dir is not None:
+        user_mem_path = user_exp_dir / "USER_MEMORY.md"
+        if user_mem_path.exists():
+            try:
+                content = user_mem_path.read_text(encoding="utf-8").strip()
+                if content:
+                    parts.append(f"\n\n【你的全局长期记忆 (USER_MEMORY.md)】\n{content}\n")
+            except Exception:
+                pass
+    if exp_dir is not None:
+        exp_mem_path = exp_dir / "MEMORY.md"
+        if exp_mem_path.exists():
+            try:
+                content = exp_mem_path.read_text(encoding="utf-8").strip()
+                if content:
+                    parts.append(f"\n\n【当前实验/仓库的记忆 (MEMORY.md)】\n{content}\n")
+            except Exception:
+                pass
+    return "".join(parts)
+
+
 def build_edit_chat_system_prompt() -> str:
     return """\
 你是一个精通机器学习和自动化的 AI 实验助手，正在与用户进行实时对话，共同修改一个已有的实验。
@@ -234,7 +261,7 @@ def build_casual_chat_prompt() -> str:
 
 def build_main_agent_prompt(user_exp_dir: Optional[Path] = None) -> str:
     """System prompt for the Orchestrator Agent (Main Agent)."""
-    return """\
+    prompt_body = """\
 你是一个资深 MLOps 专家和实验管理统筹大管家，负责与用户进行自然语言对话并根据意图自动触发相应操作。
 
 【最高指令：绝对自动化 (No-Permission Execution)】
@@ -311,12 +338,27 @@ def build_main_agent_prompt(user_exp_dir: Optional[Path] = None) -> str:
    - <font color='green'>成功/正常</font>
    - <font color='red'>错误/警告</font>
    - <font color='grey'>辅助说明/备注</font>
-""" + _get_global_rules(user_exp_dir)
+"""
+    _MEMORY_DISCIPLINE = (
+        "\n\n【长期记忆使用规范】\n"
+        "你现在拥有长期记忆能力。当你跑通了一个之前报错的 Smoke Test、发现了某个代码库的特殊运行机制、"
+        "或了解了用户的偏好时，请务必主动调用 update_memory 工具，把关键发现用极其精炼的语言记录下来，"
+        "留给未来的你作为参考！\n"
+        "- level='user'：记录跨实验通用的用户偏好和环境信息。\n"
+        "- level='experiment'：仅在有 task_id 上下文时使用，记录实验特有的调试经验。\n"
+    )
+    memory_ctx = _get_memory_context(user_exp_dir=user_exp_dir)
+    return prompt_body + _MEMORY_DISCIPLINE + memory_ctx + _get_global_rules(user_exp_dir)
 
 
-def build_sub_agent_system_prompt(task_id: str, exp_dir_str: str, user_exp_dir: Optional[Path] = None) -> str:
+def build_sub_agent_system_prompt(
+    task_id: str,
+    exp_dir_str: str,
+    user_exp_dir: Optional[Path] = None,
+    exp_dir: Optional[Path] = None,
+) -> str:
     """Build the system prompt for Sub Agent (experiment monitor assistant)."""
-    return f"""\
+    prompt_body = f"""\
 你是一个实验全生命周期管理助手（Sub Agent），负责管理实验 {task_id} 的代码、运行状态和日志。
 
 实验目录：{exp_dir_str}
@@ -394,4 +436,13 @@ def build_sub_agent_system_prompt(task_id: str, exp_dir_str: str, user_exp_dir: 
    - <font color='green'>成功/正常</font>
    - <font color='red'>错误/警告</font>
    - <font color='grey'>辅助说明/备注</font>
-""" + _get_global_rules(user_exp_dir)
+"""
+    _MEMORY_DISCIPLINE = (
+        "\n\n【长期记忆使用规范】\n"
+        "你现在拥有长期记忆能力。当你跑通了一个之前报错的 Smoke Test、完成调试、发现了代码库特殊机制后，"
+        "请务必主动调用 update_memory 工具记录经验！\n"
+        "- level='experiment'：记录本实验特有的发现（MEMORY.md）。\n"
+        "- level='user'：记录适用于未来所有实验的通用经验（USER_MEMORY.md）。\n"
+    )
+    memory_ctx = _get_memory_context(user_exp_dir=user_exp_dir, exp_dir=exp_dir)
+    return prompt_body + _MEMORY_DISCIPLINE + memory_ctx + _get_global_rules(user_exp_dir)

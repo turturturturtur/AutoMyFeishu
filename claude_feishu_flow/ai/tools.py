@@ -203,7 +203,38 @@ SYNC_BACK_REPO_TOOL: dict = {
     },
 }
 
-SUB_AGENT_TOOLS: list[dict] = [READ_LOG_TOOL, SAVE_SCRIPT_TOOL, SUBMIT_BACKGROUND_JOB_TOOL, EXECUTE_BASH_TOOL, SEND_LOCAL_IMAGE_TOOL, SYNC_BACK_REPO_TOOL]
+UPDATE_MEMORY_TOOL: dict = {
+    "name": "update_memory",
+    "description": (
+        "将重要的经验、教训或结论持久化到长期记忆文件中，供未来的对话使用。\n"
+        "- level='user'：写入用户级别的长期记忆（USER_MEMORY.md），适合跨实验通用的经验，"
+        "例如：该用户的环境依赖、惯用框架、常见错误模式、偏好设置等。\n"
+        "- level='experiment'：写入当前实验的记忆（MEMORY.md），适合本实验特有的调试经验、"
+        "超参数调优记录、已知问题等。\n"
+        "当你跑通了一个之前报错的 Smoke Test、发现了代码库特殊运行机制、或了解了用户偏好时，"
+        "请务必调用此工具记录下来。如果没有重要的新发现，请不要调用。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "level": {
+                "type": "string",
+                "enum": ["user", "experiment"],
+                "description": (
+                    "'user' 写入用户级长期记忆（USER_MEMORY.md），"
+                    "'experiment' 写入当前实验记忆（MEMORY.md）。"
+                ),
+            },
+            "content": {
+                "type": "string",
+                "description": "要记录的经验或结论，建议简洁明了，不超过500字。",
+            },
+        },
+        "required": ["level", "content"],
+    },
+}
+
+SUB_AGENT_TOOLS: list[dict] = [READ_LOG_TOOL, SAVE_SCRIPT_TOOL, SUBMIT_BACKGROUND_JOB_TOOL, EXECUTE_BASH_TOOL, SEND_LOCAL_IMAGE_TOOL, SYNC_BACK_REPO_TOOL, UPDATE_MEMORY_TOOL]
 
 
 # ---------------------------------------------------------------------------
@@ -466,6 +497,7 @@ MAIN_AGENT_TOOLS: list[dict] = [
     RENAME_EXPERIMENT_TOOL,
     WRITE_BITABLE_TOOL,
     IMPORT_LOCAL_REPO_TOOL,
+    UPDATE_MEMORY_TOOL,
 ]
 
 
@@ -1136,3 +1168,49 @@ async def handle_import_local_repo(
         _shutil.copytree, str(src), str(dest_path), symlinks=True
     )
     return f"✅ 仓库已成功导入到您的私有空间，名称为：{repo_name}"
+
+
+async def handle_update_memory(
+    level: str,
+    content: str,
+    open_id: str,
+    exp_dir: Path | None = None,
+    user_exp_dir: Path | None = None,
+) -> str:
+    """Append a timestamped memory entry to USER_MEMORY.md or MEMORY.md."""
+    from datetime import datetime as _dt
+
+    timestamp = _dt.now().strftime("%Y-%m-%d %H:%M")
+    entry = f"\n\n### [{timestamp}] 经验总结\n{content}"
+
+    if level == "user":
+        if user_exp_dir is None:
+            return "❌ update_memory 失败：level='user' 时需要 user_exp_dir。"
+        target = user_exp_dir / "USER_MEMORY.md"
+        label = "用户长期记忆"
+    elif level == "experiment":
+        if exp_dir is None:
+            return "❌ update_memory 失败：level='experiment' 时需要 exp_dir（Main Agent 不支持此 level，请使用 level='user'）。"
+        target = exp_dir / "MEMORY.md"
+        label = "实验记忆"
+    else:
+        return f"❌ update_memory 失败：未知的 level='{level}'，必须为 'user' 或 'experiment'。"
+
+    if _SANDBOX_EXPERIMENTS_DIR is not None:
+        resolved = target.resolve()
+        if not resolved.is_relative_to(_SANDBOX_EXPERIMENTS_DIR):
+            logger.warning(
+                "handle_update_memory: sandbox escape blocked: %s (open_id=%s)",
+                target, open_id,
+            )
+            return "❌ 安全沙盒拦截：记忆文件路径超出 Experiments/ 目录范围。"
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8") as f:
+        f.write(entry)
+
+    logger.info(
+        "handle_update_memory: appended %d chars to %s (open_id=%s)",
+        len(content), target, open_id,
+    )
+    return f"✅ 已将经验记录到{label}（{target.name}）。"
