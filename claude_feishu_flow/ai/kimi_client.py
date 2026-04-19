@@ -367,7 +367,7 @@ class KimiClient:
             return content if content else "(未返回有效回复)"
         return "(未返回有效回复)"
 
-    _MAIN_AGENT_MAX_ROUNDS = 10
+    _MAIN_AGENT_MAX_ROUNDS = 50
 
     async def chat_main_agent(
         self,
@@ -1089,8 +1089,8 @@ class KimiClient:
                             )
                         history.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
 
-                    if finish_reason == "stop":
-                        break
+                    # Always continue after processing tool results so the model can
+                    # chain further tool calls (Autonomous Execution Protocol).
                     continue
 
                 # stop or length without tool calls — done

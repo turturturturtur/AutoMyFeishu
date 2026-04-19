@@ -383,7 +383,7 @@ class ClaudeClient:
                     return block.text
         return "(未返回有效回复)"
 
-    _MAIN_AGENT_MAX_ROUNDS = 10
+    _MAIN_AGENT_MAX_ROUNDS = 50
 
     async def chat_main_agent(
         self,
@@ -1209,10 +1209,8 @@ class ClaudeClient:
                         })
                 history.append({"role": "user", "content": tool_results})
 
-                # If Claude signalled end_turn alongside tool use, break after
-                # processing results (it will have text to show already).
-                if response.stop_reason == "end_turn":
-                    break
+                # Always continue after processing tool results so Claude can
+                # chain further tool calls (Autonomous Execution Protocol).
                 continue
 
             # end_turn or max_tokens without tool use — done
