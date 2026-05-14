@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 import os
 from openai import OpenAI
 from dotenv import load_dotenv

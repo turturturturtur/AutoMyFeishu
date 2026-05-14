@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """Global token usage tracker shared by all AI clients."""
 import asyncio
 import json

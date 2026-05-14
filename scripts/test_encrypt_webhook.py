@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 #!/usr/bin/env python3
 """Local smoke test: simulate Feishu sending an encrypted url_verification challenge.
 

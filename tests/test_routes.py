@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """Integration tests for server/routes.py using FastAPI TestClient.
 
 These tests verify:

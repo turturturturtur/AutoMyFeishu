@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """claude-feishu-flow: Feishu + Claude AI ChatOps library."""
 
 from claude_feishu_flow.bot import Bot

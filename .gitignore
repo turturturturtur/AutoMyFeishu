@@ -20,6 +20,9 @@ logs/
 *.png
 *.pdf
 
+# Storage (user data, may contain secrets)
+Storage/
+
 # Test cache
 .pytest_cache/
 

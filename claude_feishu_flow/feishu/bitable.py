@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """Feishu Bitable (multi-dimensional table) read/write operations.
 
 Each experiment gets its own dedicated table created dynamically at launch time.

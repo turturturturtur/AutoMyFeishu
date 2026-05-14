@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """Manual integration test for Step 6+7 — Claude Tool Use (generate_experiment).
 
 Tests that ClaudeClient.generate_experiment():

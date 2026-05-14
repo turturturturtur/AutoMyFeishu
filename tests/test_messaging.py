@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """Unit tests for feishu.messaging (Messaging)."""
 
 from __future__ import annotations

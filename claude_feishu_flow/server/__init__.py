@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 from claude_feishu_flow.server.app import create_app, Services
 from claude_feishu_flow.server.routes import router
 

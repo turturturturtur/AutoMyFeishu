@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """Manual integration test for Feishu Bitable per-user binding + dynamic table creation.
 
 Requires BITABLE_APP_TOKEN to be provided as a command-line argument or set via

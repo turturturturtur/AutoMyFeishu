@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """Feishu webhook signature verification, decryption, and event parsing."""
 
 from __future__ import annotations

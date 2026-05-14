@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Tianle Niu
 # install.sh — AutoMyFeishu dependency bootstrapper
 # Usage: bash install.sh
 set -euo pipefail

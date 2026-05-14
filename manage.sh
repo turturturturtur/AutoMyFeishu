@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Tianle Niu
 # manage.sh — AutoMyFeishu service management scaffold
 # Usage: sudo bash manage.sh {install|start|stop|restart|status|log|uninstall}
 set -euo pipefail

@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """APScheduler-based cron job manager for the MLOps Orchestrator.
 
 Provides SchedulerManager, a thin wrapper around AsyncIOScheduler that:

@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """Feishu tenant_access_token manager with background auto-refresh."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """Unit tests for feishu.webhook (signature verification and event parsing)."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """Bot facade — the only class users need to instantiate."""
 
 from __future__ import annotations

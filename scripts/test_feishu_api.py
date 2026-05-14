@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """Manual integration test for Step 2/3/4 — requires a real .env file.
 
 Run:

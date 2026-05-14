@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Tianle Niu
+
 """Unit tests for runner/executor.py (ScriptExecutor)."""
 
 from __future__ import annotations
